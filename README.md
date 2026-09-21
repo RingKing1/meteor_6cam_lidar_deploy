@@ -35,6 +35,19 @@
 
 ---
 
+## 🚦 自动标注流水线建设现状 (Auto-Labeling Pipelines Status)
+
+为摆脱昂贵的人工作业、实现海量自采实车数据的工业化高效回灌，套件正在持续推进**全工序零人工自动化真值生产管线**。当前各子流水线的研发与落地状态如下：
+
+| 标注工序与任务领域 | 自动化状态 | 核心算法与工程方案 | 产出资产契约 | 演进规划与当前结论 |
+| :--- | :---: | :--- | :--- | :--- |
+| **红绿灯状态识别 (Traffic Light)** | **✅ 已全面自动化** | 基于 6 路环视相机外参空间检索高置信 ROI，结合多目标时序滤波追踪、HSV 色彩直方图动态打分与多视角置信度加权投票决策。 | `scenes/{scene}/tl_state.npz`<br/>(包含每帧红/绿/黄离散标签及有效性掩码) | 已全量产出并集成入 `run_production_pipeline.py` 与训练损失微调回路。 |
+| **3D 目标检测边界框 (3D Bounding Box)** | **✅ 已全面自动化** | 基于 5 帧全局 ENU 位姿补偿运动消除的稠密化点云，执行连续点云几何聚类，并通过 6 路环视多视角反投影语义交叉确认（或基于 FocalFormer3D-LC 多模态跨注意力直接提取并转为标准 ROS REP-103 右手系）。 | `scenes/{scene}/bev_box/{fi}.npz`<br/>`scenes/{scene}/bev_box/{fi}.png`<br/>(800x500 高精栅格 + 3D 八角点) | 全库 6 场景（17,845 帧）超 30 万个高精 3D 边界框已全自动构建完成，虚警率较纯激光雷达降低 15.4 倍。 |
+| **BEV 语义分割与 3D Occupancy 体素** | **🔄 待深度升级 (Roadmap)** | 目前基础版本基于 2D Panoptic (Mask2Former) + 单帧/多帧点云深度反投影生成初步车道与占据网格。对细长车道线、动态目标拖影及远端遮挡区域的补全仍有提升空间。 | `scenes/{scene}/gt/{fi}.png`<br/>`scenes/{scene}/occ/{fi}.npy` | **待升级攻关**：拟引入无监督 NeRF / 3D Gaussian Splatting (3DGS) 进行时空连续场景重建，或借助大模型（SAM / 多模态蒸馏）实现亚像素级高连续表面分割。 |
+| **自车运动与 3.0s 规划轨迹** | **✅ 已全面自动化** | WGS-84 经纬度差分 GPS/IMU 数据自动平滑解算局部 ENU 高精轨迹，自动计算初始车速与 3.0s 航向控制平滑曲线。 | `scenes/{scene}/ego_motion.npz` | 已全量稳定运行。 |
+
+---
+
 ## 🗂️ 仓库目录结构
 
 ```
@@ -46,25 +59,43 @@ meteor_6cam_lidar_deploy/
 │
 ├── doc/                           # 核心技术文档中心
 │   ├── MODEL_ARCHITECTURE.md      # 51.83M 模型 30 层逐层规格与时空记忆架构说明书
+│   ├── AUTOLABEL_UPGRADE_PLAN.md  # 3D Box 与红绿灯自动化标注升级方案技术全量设计
 │   ├── DATASET_AUTOLABEL_PLAN.md  # 零人工标注全自动数据生产流水线规划方案
 │   └── README.md                  # 快速使用备忘
 │
-├── scripts/                       # 核心自动化生产、训练、诊断与可视化工具集
-│   ├── run_production_pipeline.py # 全自动一键多工序数据标注与预处理流水线
-│   ├── run_finetune.py            # 单卡/多卡微调启动器（支持冻结/解冻与梯度裁剪）
-│   ├── pause_after_epoch1.py      # 训练进度监控与定点安全拦截脚本
-│   ├── infer_custom.py            # 端到端推理引擎与 1080p 可视化视频合成
-│   ├── generate_3d_videos.sh      # 3D 视图 Occupancy 全量评测视频批量生成脚本
-│   ├── visualize_val.py           # 验证集多任务高分辨率仪表盘输出
-│   ├── visualize_intent.py        # 导航意图条件引导多模态轨迹验证与可视化
-│   ├── convert_custom.py          # 原始 6 相机 + LiDAR 数据格式转换与时间对齐
-│   ├── build_ego_motion.py        # ENU 坐标转换与真值位姿/平滑航向点生成
-│   ├── build_bev_gt.py            # 伪标签 BEV 车道地图自动生成
-│   ├── build_depth_and_occ.py     # 点云稠密化深度与 3D 占据体素真值构建
-│   ├── batch_2d_panoptic.py       # 2D 全景语义掩码批量推理提取
-│   ├── test_2d_panoptic.py        # 2D 全景模型选型冒烟与推理测试
-│   ├── diag_occ.py                # 3D 体素占用分布与空网格诊断分析
-│   └── trace_model.py             # 基于 PyTorch Hook 的逐层张量规格探测工具
+├── scripts/                       # 核心自动化生产、训练、诊断与可视化工具集（按流水线分类）
+│   ├── run_production_pipeline.py # 🌟 全自动一键多工序数据标注与预处理生产总控
+│   ├── README.md                  # 详细脚本分类说明与全流水线调用指南
+│   │
+│   ├── autolabel_3d_box/          # 🚗 【已实现】3D 目标检测边界框自动标注流水线
+│   │   ├── build_3d_box_gt.py     # 5 帧位姿补偿点云融合 + 6 相机多视反投影语义过滤
+│   │   ├── infer_focalformer_dataset.py # FocalFormer3D-LC 多模态全量推理与右手系转换
+│   │   ├── compare_focalformer_centerpoint.py # FocalFormer3D 与 CenterPoint 对比评测
+│   │   └── bev_box_visualizer.py  # 6 路环视 3D 线框投影 + BEV 栅格高精渲染工具
+│   │
+│   ├── autolabel_traffic_light/   # 🚦 【已实现】红绿灯状态识别自动标注流水线
+│   │   └── build_tl_gt.py         # 6 相机 ROI 提取、多目标时序追踪与 HSV 颜色投票
+│   │
+│   ├── autolabel_semantic_occ/    # 🌐 【待升级】语义分割与 3D 占据体素自动标注流水线
+│   │   ├── batch_2d_panoptic.py   # Mask2Former 2D 全景语义掩码批量推理
+│   │   ├── test_2d_panoptic.py    # 2D 全景分割模型性能与选型评测
+│   │   ├── build_bev_gt.py        # 点云时序累加 + 伪标签 BEV 车道地图生成
+│   │   ├── build_depth_and_occ.py # 稠密化几何深度与 3D 占据体素（Occupancy）构建
+│   │   └── diag_occ.py            # 3D 体素类间分布与空网格诊断分析
+│   │
+│   ├── autolabel_ego_motion/      # 🧭 自车运动与位姿解算流水线
+│   │   ├── convert_custom.py      # 原始相机与点云时间戳对齐与 manifest 资产构建
+│   │   └── build_ego_motion.py    # WGS-84 转 ENU、位姿平滑与 3.0s 未来轨迹解算
+│   │
+│   └── training_eval/             # 🚀 模型微调训练与端到端规划评测
+│       ├── run_finetune.py        # 51.83M 模型微调启动器（单卡/多卡，支持任务损失权重）
+│       ├── pause_after_epoch1.py  # 训练进度监控与定点安全拦截钩子
+│       ├── infer_custom.py        # 模型端到端推理引擎与 1080p 多任务视频导出
+│       ├── generate_3d_videos.sh  # 3D 等轴测 Occupancy 体素评测视频批量生成脚本
+│       ├── visualize_val.py       # 验证集多任务高分辨率仪表盘输出
+│       ├── visualize_intent.py    # 导航意图条件引导多模态轨迹验证与可视化
+│       ├── smoke_infer.py         # 快速单帧推理冒烟测试
+│       └── trace_model.py         # PyTorch 逐层张量规格与算子探测工具
 │
 ├── docker/                        # 预置 TensorRT 10 + CUDA 12.4 容器环境与镜像构建
 │   ├── Dockerfile                 # 包含 CUDA 12.4 + TensorRT 10.3 + ONNXRuntime 运行底座
@@ -206,35 +237,50 @@ docker run -d --name meteor_run \
 docker exec -it meteor_run python3 /work/meteor_6cam_lidar_deploy/scripts/run_production_pipeline.py
 ```
 
-### 3. 模型微调训练 (Fine-Tuning)
-
-基于 `meteor_v157.pt` 预训练模型，在自建 6 相机与激光雷达数据上启动单卡微调：
+### 3. 全自动数据标注流水线执行
 
 ```bash
-docker exec -it meteor_run python3 /work/meteor_6cam_lidar_deploy/scripts/run_finetune.py \
+# 1. 运行红绿灯全自动时序跟踪与状态识别
+python3 /work/meteor_6cam_lidar_deploy/scripts/autolabel_traffic_light/build_tl_gt.py --scenes all
+
+# 2. 运行 5 帧位姿补偿 + 6 相机确认的 3D Box 全自动生成
+python3 /work/meteor_6cam_lidar_deploy/scripts/autolabel_3d_box/build_3d_box_gt.py --scenes all --n-sweeps 5 --workers 16
+
+# 3. 运行 6 相机多视角线框投影 + BEV 栅格可视化抽检
+python3 /work/meteor_6cam_lidar_deploy/scripts/autolabel_3d_box/bev_box_visualizer.py --scene data_20260910_061820 --frames 100,200,400,600
+```
+
+### 4. 模型微调训练 (Fine-Tuning)
+
+基于 `meteor_v157.pt` 预训练模型，在自建 6 相机与激光雷达数据上启动单卡多任务微调（启用 3D Box 与 红绿灯联合优化）：
+
+```bash
+docker exec -it meteor_run python3 /work/meteor_6cam_lidar_deploy/scripts/training_eval/run_finetune.py \
   --model v52 \
   --init-ckpt /work/METEOR/checkpoints/meteor_v157.pt \
   --train-scenes /work/meteor_6cam_lidar_deploy/train_scenes.txt \
   --val-scenes /work/meteor_6cam_lidar_deploy/val_scenes.txt \
+  --box-w 1.0 \
+  --tl-w 1.0 \
   --epochs 5 \
   --batch-size 1
 ```
 
-### 4. 推理与 3D Occupancy 视频生成
+### 5. 推理与 3D Occupancy 视频生成
 
 使用训练收敛的最优权重对验证集场景进行推理并导出 1080p 视频：
 
 ```bash
 # 启动 3D 等轴测体素模式推理渲染
-bash /work/meteor_6cam_lidar_deploy/scripts/generate_3d_videos.sh
+bash /work/meteor_6cam_lidar_deploy/scripts/training_eval/generate_3d_videos.sh
 ```
 
-### 5. 导航指令条件引导与轨迹多模态验证
+### 6. 导航指令条件引导与轨迹多模态验证
 
 验证模型对前向直行、左转意图、右转意图的轨迹响应灵敏度：
 
 ```bash
-docker exec -it meteor_run python3 /work/meteor_6cam_lidar_deploy/scripts/visualize_intent.py \
+docker exec -it meteor_run python3 /work/meteor_6cam_lidar_deploy/scripts/training_eval/visualize_intent.py \
   --frame 50 \
   --weights /work/meteor_6cam_lidar_deploy/checkpoints/meteor_custom_v52/best.pt
 ```

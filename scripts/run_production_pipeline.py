@@ -49,9 +49,12 @@ def log(msg):
 
 def run_stage1_2d(scene_cfg, limit=0):
     log(f"==================================================")
-    log(f"[STAGE 1/3] 2D Panoptic Segmentation: {scene_cfg['name']}")
+    log(f"[STAGE 1/5] 2D Panoptic Segmentation: {scene_cfg['name']}")
     log(f"==================================================")
-    from batch_2d_panoptic import process_scene
+    try:
+        from autolabel_semantic_occ.batch_2d_panoptic import process_scene
+    except ImportError:
+        from batch_2d_panoptic import process_scene
     process_scene(
         scene_cfg["scene_dir"],
         model_name="facebook/mask2former-swin-large-mapillary-vistas-panoptic",
@@ -62,9 +65,12 @@ def run_stage1_2d(scene_cfg, limit=0):
 
 def run_stage2_bev(scene_cfg, workers=16, limit=0):
     log(f"==================================================")
-    log(f"[STAGE 2/3] BEV Map Accumulation & Lane GT: {scene_cfg['name']}")
+    log(f"[STAGE 2/5] BEV Map Accumulation & Lane GT: {scene_cfg['name']}")
     log(f"==================================================")
-    from build_bev_gt import process_scene
+    try:
+        from autolabel_semantic_occ.build_bev_gt import process_scene
+    except ImportError:
+        from build_bev_gt import process_scene
     process_scene(
         scene_cfg["raw_dir"],
         scene_cfg["scene_dir"],
@@ -75,9 +81,12 @@ def run_stage2_bev(scene_cfg, workers=16, limit=0):
 
 def run_stage3_depth_occ(scene_cfg, workers=16, limit=0):
     log(f"==================================================")
-    log(f"[STAGE 3/3] Dense Depth & 3D Occupancy: {scene_cfg['name']}")
+    log(f"[STAGE 3/5] Dense Depth & 3D Occupancy: {scene_cfg['name']}")
     log(f"==================================================")
-    from build_depth_and_occ import process_scene
+    try:
+        from autolabel_semantic_occ.build_depth_and_occ import process_scene
+    except ImportError:
+        from build_depth_and_occ import process_scene
     process_scene(
         scene_cfg["raw_dir"],
         scene_cfg["scene_dir"],
@@ -90,7 +99,10 @@ def run_stage4_box(scene_cfg, workers=16, limit=0):
     log(f"==================================================")
     log(f"[STAGE 4/5] 3D Box & Camera Confirmation: {scene_cfg['name']}")
     log(f"==================================================")
-    from build_3d_box_gt import process_scene
+    try:
+        from autolabel_3d_box.build_3d_box_gt import process_scene
+    except ImportError:
+        from build_3d_box_gt import process_scene
     process_scene(
         scene_cfg["name"],
         scene_cfg["raw_dir"],
