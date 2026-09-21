@@ -66,6 +66,13 @@ meteor_6cam_lidar_deploy/
 │   ├── diag_occ.py                # 3D 体素占用分布与空网格诊断分析
 │   └── trace_model.py             # 基于 PyTorch Hook 的逐层张量规格探测工具
 │
+├── docker/                        # 预置 TensorRT 10 + CUDA 12.4 容器环境与镜像构建
+│   ├── Dockerfile                 # 包含 CUDA 12.4 + TensorRT 10.3 + ONNXRuntime 运行底座
+│   ├── build.sh                   # 自动化镜像一键构建脚本 (meteor_trt10_cu124_py310:v1)
+│   ├── run.sh                     # 容器启动与工作空间挂载脚本
+│   ├── pip.conf                   # 国内清华 pip 镜像源
+│   └── sources.list.jammy         # Ubuntu 22.04 APT 镜像源
+│
 ├── checkpoints/                   # [已 gitignore] 微调权重保存目录 (best.pt 等)
 ├── engine/                        # [已 gitignore] TensorRT Engine 与 ONNX 导出目录
 ├── scenes/                        # [已 gitignore] 转换后用于训练的完整数据集目录
