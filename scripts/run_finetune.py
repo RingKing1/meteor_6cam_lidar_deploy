@@ -62,11 +62,11 @@ def main():
         "--freeze-depth",
         "--occ-w", "0.5",
         "--ego-w", "1.0",
-        # Zero out tasks absent from custom 6-camera rig
-        "--box-w", "0.0",
+        # 3D Box detection activated via camera-confirmed 64-line LiDAR autolabel
+        "--box-w", "1.0",
         "--bbox2d-w", "0.0",
         "--traj-w", "0.0",
-        "--tl-w", "0.0",
+        "--tl-w", "1.0",
         "--stat-w", "0.0",
         "--lanegraph-w", "0.0",
         "--n-cams", "8",

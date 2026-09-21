@@ -59,3 +59,13 @@ logs/
 *.swo
 *~
 tmp/
+
+# ==============================================================================
+# Traffic Light & Corridor Autolabel Artifacts (Models & Intermediates)
+# ==============================================================================
+traffic_light_artifacts/
+
+# ==============================================================================
+# 3D Bounding Box & Camera Confirmation Artifacts (Models & Intermediates)
+# ==============================================================================
+box3d_artifacts/
