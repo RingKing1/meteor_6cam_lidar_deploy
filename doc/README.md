@@ -12,7 +12,7 @@ meteor_6cam_lidar_deploy/
   scripts/  convert_custom.py / infer_custom.py / smoke_infer.py
   scenes/   <seq>/ 转换后的 METEOR 场景（manifest.json, img/, lidar_bev/, ego_motion.npz）
   videos/   推理输出 mp4
-  docs/     本文件
+  doc/      文档中心 (README.md, MODEL_ARCHITECTURE.md, DATASET_AUTOLABEL_PLAN.md)
 ```
 
 ## 输入数据约定（每序列）
