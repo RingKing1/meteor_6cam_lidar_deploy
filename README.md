@@ -42,8 +42,8 @@
 | 标注工序与任务领域 | 自动化状态 | 核心算法与工程方案 | 产出资产契约 | 演进规划与当前结论 |
 | :--- | :---: | :--- | :--- | :--- |
 | **红绿灯状态识别 (Traffic Light)** | **✅ 已全面自动化** | 基于 6 路环视相机外参空间检索高置信 ROI，结合多目标时序滤波追踪、HSV 色彩直方图动态打分与多视角置信度加权投票决策。 | `scenes/{scene}/tl_state.npz`<br/>(包含每帧红/绿/黄离散标签及有效性掩码) | 已全量产出并集成入 `run_production_pipeline.py` 与训练损失微调回路。 |
-| **3D 目标检测边界框 (3D Bounding Box)** | **✅ 已全面自动化** | 基于 5 帧全局 ENU 位姿补偿运动消除的稠密化点云，执行连续点云几何聚类，并通过 6 路环视多视角反投影语义交叉确认（或基于 FocalFormer3D-LC 多模态跨注意力直接提取并转为标准 ROS REP-103 右手系）。 | `scenes/{scene}/bev_box/{fi}.npz`<br/>`scenes/{scene}/bev_box/{fi}.png`<br/>(800x500 高精栅格 + 3D 八角点) | 全库 6 场景（17,845 帧）超 30 万个高精 3D 边界框已全自动构建完成，虚警率较纯激光雷达降低 15.4 倍。 |
-| **BEV 语义分割与 3D Occupancy 体素** | **🔄 待深度升级 (Roadmap)** | 目前基础版本基于 2D Panoptic (Mask2Former) + 单帧/多帧点云深度反投影生成初步车道与占据网格。对细长车道线、动态目标拖影及远端遮挡区域的补全仍有提升空间。 | `scenes/{scene}/gt/{fi}.png`<br/>`scenes/{scene}/occ/{fi}.npy` | **待升级攻关**：拟引入无监督 NeRF / 3D Gaussian Splatting (3DGS) 进行时空连续场景重建，或借助大模型（SAM / 多模态蒸馏）实现亚像素级高连续表面分割。 |
+| **3D 目标检测边界框 (3D Bounding Box)** | **✅ 已全面自动化** | **3 个模型生成候选并投票**:① FocalFormer3D-LC 多模态跨注意力 3D 检测(基于 5 帧全局 ENU 位姿补偿运动消除的稠密化点云)→ 3D 候选;② YOLOv8x 2D 目标检测 → 2D 候选;③ Mask2Former 2D 语义分割 → 掩码确认;三模态共识投票(3D 框投影到 6 路环视 + 2D 语义覆盖率)生成最终 3D 框,并转为标准 ROS REP-103 右手系。 | `scenes/{scene}/bev_box/{fi}.npz`<br/>`scenes/{scene}/bev_box/{fi}.png`<br/>(800x500 高精栅格 + 3D 八角点) | 全库 6 场景（17,845 帧）超 30 万个高精 3D 边界框已全自动构建完成，虚警率较纯激光雷达降低 15.4 倍。 |
+| **BEV 语义分割与 3D Occupancy 体素** | **🔄 待深度升级 (Roadmap)** | 目前基础版本基于 2D Panoptic (Mask2Former) + 单帧/多帧点云深度反投影生成初步车道与占据网格；其中 **occ 体素构建会使用 3D 框的位置作为动态目标语义先验**(占据语义分类与 3D 框位置对齐)。对细长车道线、动态目标拖影及远端遮挡区域的补全仍有提升空间。 | `scenes/{scene}/gt/{fi}.png`<br/>`scenes/{scene}/occ/{fi}.npy` | **待升级攻关**：拟引入无监督 NeRF / 3D Gaussian Splatting (3DGS) 进行时空连续场景重建，或借助大模型（SAM / 多模态蒸馏）实现亚像素级高连续表面分割。 |
 | **自车运动与 3.0s 规划轨迹** | **✅ 已全面自动化** | WGS-84 经纬度差分 GPS/IMU 数据自动平滑解算局部 ENU 高精轨迹，自动计算初始车速与 3.0s 航向控制平滑曲线。 | `scenes/{scene}/ego_motion.npz` | 已全量稳定运行。 |
 
 ---
@@ -131,8 +131,8 @@ meteor_6cam_lidar_deploy/
 |---|---|---|---|
 | `seg`(BEV 分割) | 1.0 | 自车周围 BEV 栅格 9 类语义分割 | `scenes/<s>/gt/`(`extract_gt.py` 由 LiDAR 投影生成) |
 | `seg2d`(2D 分割) | 0.4 | 多相机 2D 语义分割(21 类) | `seg2d21/`(`extract_seg2d.py`) |
-| `depth`(深度) | 0.3 | 相机深度估计(本轮 `--freeze-depth` 冻结) | `depth4/`(`extract_depth_gt.py`,LiDAR 投影) |
-| `occ`(occupancy) | 0.5 | BEV 占据体素 16 类栅格(±40m,200×200) | `occ/`(`extract_occ.py`,LiDAR 体素化) |
+| `depth`(深度) | 0.3 | 相机深度估计(本轮 `--freeze-depth` 冻结:**深度尺度被 25 个下游 loss 经 lift 反投影共同拉扯,而深度整体平移对下游目标近似"平坦方向"——实测 +30m 偏置后 lift 权重 sharpness 7.22 vs 7.31、mIoU 不变;唯一约束尺度的 depth L1 有效权重仅 ~0.06,联合微调实测 MAE 从 3.1m 漂移到 ~30m。故冻结保护已蒸馏好的深度,后续更新需单独 re-distill**) | `depth4/`(`extract_depth_gt.py`,LiDAR 投影) |
+| `occ`(occupancy) | 0.5 | BEV 占据体素 16 类栅格(±40m,200×200;**构建时使用 3D 框位置作为动态目标先验**) | `occ/`(`extract_occ.py`,LiDAR 体素化) |
 | `ego`(E2E 规划) | 1.0 | 自车未来 3s 轨迹(6 航点,K=3 多模态)+ 运动学量 | `ego_motion.npz`(`extract_ego.py`,底盘/定位提取) |
 | `box`(3D 检测) | 0.5 | BEV 3D 检测(热图 hm + 框回归) | `bev_box_p` + `bev_box`(**phase3 三模态融合**:FocalFormer3D+YOLOv8x+Mask2Former 投票) |
 | `bbox2d`(2D 检测) | 0.3 | 多相机 2D 检测 | `bbox2d/`(同一融合脚本) |
