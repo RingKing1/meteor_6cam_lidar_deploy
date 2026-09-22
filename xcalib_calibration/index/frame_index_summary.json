@@ -1,0 +1,87 @@
+{
+  "raw_data_dir": "/home/nvidia/working_ppt/Postdoc_Materials/论文3/meteor_6cam_lidar_deploy/raw_data",
+  "total_lidar_frames": 17845,
+  "complete_six_camera_frames": 17845,
+  "missing_image_count_by_camera": {
+    "front_wide": 0,
+    "front_left": 0,
+    "front_right": 0,
+    "back_wide": 0,
+    "back_left": 0,
+    "back_right": 0
+  },
+  "scenes": {
+    "data_20260910_061820": {
+      "lidar_pcd": 2993,
+      "complete_camera_frames": 2993,
+      "missing_by_camera": {
+        "front_wide": 0,
+        "front_left": 0,
+        "front_right": 0,
+        "back_wide": 0,
+        "back_left": 0,
+        "back_right": 0
+      }
+    },
+    "data_20260910_062659": {
+      "lidar_pcd": 2971,
+      "complete_camera_frames": 2971,
+      "missing_by_camera": {
+        "front_wide": 0,
+        "front_left": 0,
+        "front_right": 0,
+        "back_wide": 0,
+        "back_left": 0,
+        "back_right": 0
+      }
+    },
+    "data_20260910_063822": {
+      "lidar_pcd": 2970,
+      "complete_camera_frames": 2970,
+      "missing_by_camera": {
+        "front_wide": 0,
+        "front_left": 0,
+        "front_right": 0,
+        "back_wide": 0,
+        "back_left": 0,
+        "back_right": 0
+      }
+    },
+    "data_20260910_064331": {
+      "lidar_pcd": 2970,
+      "complete_camera_frames": 2970,
+      "missing_by_camera": {
+        "front_wide": 0,
+        "front_left": 0,
+        "front_right": 0,
+        "back_wide": 0,
+        "back_left": 0,
+        "back_right": 0
+      }
+    },
+    "data_20260910_073823": {
+      "lidar_pcd": 2971,
+      "complete_camera_frames": 2971,
+      "missing_by_camera": {
+        "front_wide": 0,
+        "front_left": 0,
+        "front_right": 0,
+        "back_wide": 0,
+        "back_left": 0,
+        "back_right": 0
+      }
+    },
+    "data_20260910_074912": {
+      "lidar_pcd": 2970,
+      "complete_camera_frames": 2970,
+      "missing_by_camera": {
+        "front_wide": 0,
+        "front_left": 0,
+        "front_right": 0,
+        "back_wide": 0,
+        "back_left": 0,
+        "back_right": 0
+      }
+    }
+  }
+}

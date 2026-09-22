@@ -176,27 +176,33 @@ def load_frame_inputs(scene_dir, raw_dir, lidar_dir, pcd_files, frame_idx, n_swe
     return frame_idx, fused_pts, imgs_arr
 
 
-def save_frame_result(out_dir, frame_idx, converted_boxes_3d):
-    """Saves .npz and .png matching scenes/{scene}/bev_box/ schema."""
+def save_frame_result(out_dir, frame_idx, converted_boxes_3d, converted_scores=None):
+    """Saves .npz and .png matching scenes/{scene}/bev_box/ schema with optional scores."""
     npz_path = os.path.join(out_dir, f"{frame_idx:04d}.npz")
     png_path = os.path.join(out_dir, f"{frame_idx:04d}.png")
 
     boxes_out = []
     boxes_3d_out = []
+    scores_out = []
     bev_canvas = np.zeros((BEV_H, BEV_W), dtype=np.uint8)
 
-    for b in converted_boxes_3d:
+    for i, b in enumerate(converted_boxes_3d):
         cls, cx, cy, zc, l, w, h, yaw = b
         cors_b = box_bev_corners(cx, cy, l, w, yaw)
         cv2.fillPoly(bev_canvas, [np.round(cors_b).astype(np.int32).reshape(-1, 1, 2)], int(cls))
         boxes_out.append([cls, cx, cy, l, w, yaw])
         boxes_3d_out.append([cls, cx, cy, zc, l, w, h, yaw])
+        if converted_scores is not None and i < len(converted_scores):
+            scores_out.append(converted_scores[i])
 
-    np.savez_compressed(
-        npz_path,
-        boxes=np.array(boxes_out, dtype=np.float32),
-        boxes_3d=np.array(boxes_3d_out, dtype=np.float32)
-    )
+    save_dict = {
+        "boxes": np.array(boxes_out, dtype=np.float32).reshape(-1, 6) if boxes_out else np.zeros((0, 6), dtype=np.float32),
+        "boxes_3d": np.array(boxes_3d_out, dtype=np.float32).reshape(-1, 8) if boxes_3d_out else np.zeros((0, 8), dtype=np.float32)
+    }
+    if converted_scores is not None:
+        save_dict["scores"] = np.array(scores_out, dtype=np.float32) if scores_out else np.zeros((0,), dtype=np.float32)
+
+    np.savez_compressed(npz_path, **save_dict)
     cv2.imwrite(png_path, bev_canvas)
 
 
@@ -220,16 +226,20 @@ def process_scene(scene, args, model, lidar2img_arr):
 
     print(f"\n[*] Processing {scene}: {num_frames} frames -> {scene_out_dir}")
 
-    # Determine frames to process (support resume)
-    frames_to_run = []
-    for fi in range(num_frames):
-        npz_f = os.path.join(scene_out_dir, f"{fi:04d}.npz")
-        png_f = os.path.join(scene_out_dir, f"{fi:04d}.png")
-        if not (os.path.exists(npz_f) and os.path.exists(png_f)) or args.force:
-            frames_to_run.append(fi)
+    # Determine frames to process (support resume & specific frames)
+    if args.frames is not None:
+        target_indices = [int(x.strip()) for x in args.frames.split(",") if x.strip()]
+        frames_to_run = [fi for fi in target_indices if 0 <= fi < num_frames]
+    else:
+        frames_to_run = []
+        for fi in range(num_frames):
+            npz_f = os.path.join(scene_out_dir, f"{fi:04d}.npz")
+            png_f = os.path.join(scene_out_dir, f"{fi:04d}.png")
+            if not (os.path.exists(npz_f) and os.path.exists(png_f)) or args.force:
+                frames_to_run.append(fi)
 
-    if args.max_frames > 0:
-        frames_to_run = frames_to_run[:args.max_frames]
+        if args.max_frames > 0:
+            frames_to_run = frames_to_run[:args.max_frames]
 
     print(f"[*] Frames to process: {len(frames_to_run)} / {num_frames} (already completed: {num_frames - len(frames_to_run)})")
     if not frames_to_run:
@@ -287,6 +297,7 @@ def process_scene(scene, args, model, lidar2img_arr):
         focal_l = focal_labels[mask]
 
         converted_boxes = []
+        converted_scores = []
         for i in range(len(focal_b)):
             l_id = int(focal_l[i])
             if l_id in VEHICLE_LABEL_IDS:
@@ -315,8 +326,9 @@ def process_scene(scene, args, model, lidar2img_arr):
                 continue
 
             converted_boxes.append([target_cls, cx, cy, true_zc, true_length, true_width, true_height, true_yaw])
+            converted_scores.append(float(focal_s[i]))
 
-        writer_pool.submit(save_frame_result, scene_out_dir, frame_idx, converted_boxes)
+        writer_pool.submit(save_frame_result, scene_out_dir, frame_idx, converted_boxes, converted_scores)
 
         processed_count += 1
         if processed_count % 10 == 0 or processed_count == len(frames_to_run):
@@ -337,10 +349,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenes", default="all", help="all or comma-separated scene list")
     parser.add_argument("--n-sweeps", type=int, default=5)
-    parser.add_argument("--score-thresh", type=float, default=0.25)
+    parser.add_argument("--score-thresh", type=float, default=0.15)
+    parser.add_argument("--frames", default=None, help="comma-separated specific frame indices")
     parser.add_argument("--max-frames", type=int, default=-1, help="-1 for all frames, or N for smoke test")
     parser.add_argument("--force", action="store_true", help="overwrite existing results")
-    parser.add_argument("--out-dir", default="/work/meteor_6cam_lidar_deploy/box3d_artifacts/focalformer_bev_box")
+    parser.add_argument("--out-dir", default="/work/meteor_6cam_lidar_deploy/box3d_artifacts/focalformer_bev_box_015")
     args = parser.parse_args()
 
     all_scenes = [

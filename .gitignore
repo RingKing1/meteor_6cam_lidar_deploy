@@ -76,3 +76,20 @@ crosswalk_test_vis/
 *.png
 *.jpg
 *.jpeg
+
+# ==============================================================================
+# XCalib Extrinsic Calibration Workspace
+# Keep the plan, source scripts, configs, and small summaries versioned; ignore
+# local environments and artifacts regenerated from raw_data.
+# ==============================================================================
+xcalib_calibration/.venv/
+xcalib_calibration/logs/
+xcalib_calibration/overlays/
+xcalib_calibration/converted/
+xcalib_calibration/detections/
+xcalib_calibration/baseline/
+xcalib_calibration/matches/
+xcalib_calibration/candidates/
+xcalib_calibration/validation/
+xcalib_calibration/index/frame_index.csv
+xcalib_calibration/index/sample_diagnostic_detailed.json

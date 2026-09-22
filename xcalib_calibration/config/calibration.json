@@ -1,0 +1,52 @@
+{
+  "image_width": 1920,
+  "image_height": 1080,
+  "image_already_undistorted": true,
+  "raw_data_dir": "../raw_data",
+  "scenes": [
+    "data_20260910_061820",
+    "data_20260910_062659",
+    "data_20260910_063822",
+    "data_20260910_064331",
+    "data_20260910_073823",
+    "data_20260910_074912"
+  ],
+  "cameras": [
+    {
+      "name": "front_wide",
+      "directory": "camera_0_front100",
+      "calibration": "camera_0_front100.json"
+    },
+    {
+      "name": "front_left",
+      "directory": "camera_3_left_front",
+      "calibration": "camera_3_left_front.json"
+    },
+    {
+      "name": "front_right",
+      "directory": "camera_4_right_front",
+      "calibration": "camera_4_right_front.json"
+    },
+    {
+      "name": "back_wide",
+      "directory": "camera_5_back",
+      "calibration": "camera_5_back.json"
+    },
+    {
+      "name": "back_left",
+      "directory": "camera_6_left_back",
+      "calibration": "camera_6_left_back.json"
+    },
+    {
+      "name": "back_right",
+      "directory": "camera_7_right_back",
+      "calibration": "camera_7_right_back.json"
+    }
+  ],
+  "sampling": {
+    "frames_per_scene": 20,
+    "contact_sheet_camera": "front_wide",
+    "contact_sheet_columns": 4,
+    "thumbnail_width": 480
+  }
+}
