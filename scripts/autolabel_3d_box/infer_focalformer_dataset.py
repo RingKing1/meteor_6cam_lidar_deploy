@@ -99,6 +99,18 @@ def box_bev_corners(cx, cy, l, w, yaw):
     return np.array(cors, dtype=np.float32)
 
 
+def is_ego_vehicle_box(cx, cy, l, w, yaw):
+    """Prunes self-detection false positives where the ego vehicle body is detected as an object."""
+    if abs(cx) > 2.0 or abs(cy) > 0.8:
+        return False
+    # Check if box contains ego origin (0.0, 0.0)
+    dx, dy = -cx, -cy
+    c, s = np.cos(yaw), np.sin(yaw)
+    lx = dx * c + dy * s
+    ly = -dx * s + dy * c
+    return abs(lx) <= (l / 2.0) and abs(ly) <= (w / 2.0)
+
+
 def load_frame_inputs(scene_dir, raw_dir, lidar_dir, pcd_files, frame_idx, n_sweeps, ego_poses, R_el, t_el):
     """Loads 5-sweep motion-compensated point cloud and 6 camera images."""
     curr_pose = ego_poses[frame_idx]
@@ -296,6 +308,11 @@ def process_scene(scene, args, model, lidar2img_arr):
             true_width = float(dx)
             true_height = float(dz)
             true_zc = float(z_bottom + dz / 2.0)
+
+            # Filter out ego-vehicle self-detection
+            if target_cls == 1.0 and is_ego_vehicle_box(cx, cy, true_length, true_width, true_yaw):
+                total_veh -= 1
+                continue
 
             converted_boxes.append([target_cls, cx, cy, true_zc, true_length, true_width, true_height, true_yaw])
 
