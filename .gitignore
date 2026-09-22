@@ -70,3 +70,4 @@ traffic_light_artifacts/
 # ==============================================================================
 box3d_artifacts/
 focalformer_test_vis/
+occ_test_vis/
