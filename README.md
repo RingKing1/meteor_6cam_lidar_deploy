@@ -160,40 +160,38 @@ imgs ──> image_feats (ResNet backbone) ──f──┬──> ① bbox2d  2
                                                     │
                         dprob(深度分布) × ctx(上下文) ──> project_bev (lift 几何反投影)
                                                     │
-                                         单帧 BEV ──┬──> ② seg   BEV分割 (dec,静态BEV,融合前)
+                         单帧 RAW BEV (_last_bev,融合前) ──┬──> ② seg   BEV分割 (dec)
+                                                            ├──> ② occ   (occ_stem crop)
+                                                            ├──> ② box   (det_stem→hm/reg)
+                                                            ├──> ② stat  (stat_head←det特征)
+                                                            ├──> ② flow  (flow_head←occ特征)
+                                                            ├──> ② lg    (lg_tower,detach冻结)
+                                                            └──> ② pl    (pl_head,伪激光雷达重建)
                                                     │
                              temporal_fuse (3槽时空记忆 + 自车运动补偿)
                                                     │
-                                         融合 BEV (_fused_bev) ──┬──> ③ occ    (occ_stem crop)
-                                                    │             ├──> ③ risk   (risk_head crop)
-                                                    │             └──> ③ ego    (全局池化 + v0)
+                                         融合 BEV (_fused_bev) ──┬──> ③ risk  (risk_head crop)
+                                                    │             └──> ③ ego   (全局池化 + v0)
                                                     │
-                                          occ 中间特征 (_occ_feat) ──> ④ flow   (flow_head)
-                                                    │
-                             det_stem ──> 检测特征 (_det_feat) ──┬──> ⑤ box    (hm_head/reg_head)
-                                                                ├──> ⑤ traj   (traj_head)
-                                                                └──> ⑤ stat   (stat_head)
+                                          traj = traj_stem(fused) ⊕ det_feat(detach)  → ⑤ traj
                                                     │
                                          时序特征 (_tf) ────────> ⑥ unk    (unk_dense)
-                                                    │
-                             单帧 BEV(冻结,detach) ─────────────> ⑦ lg     (lg_tower)
 ```
 
 | 层 | 位置 | 消费的特征 | Head |
 |---|---|---|---|
 | ① 图像层(最靠前) | backbone 输出 | `f` / `_f_s4`(前视) | **bbox2d、seg2d、depth、tl** |
-| ② 静态 BEV 层 | lift 之后、融合之前 | `lane_input()` | **seg**(车道几何用干净 BEV,避免运动残影) |
-| ③ 融合 BEV 层(靠后) | 时空融合之后 | `_fused_bev`(crop/池化) | **occ、risk、ego** |
-| ④ occ 之后 | occ stem 输出 | `_occ_feat` | **flow**(occ 的动态扩展,紧跟 occ) |
-| ⑤ 检测特征层 | det_stem 输出 | `_det_feat` | **box、traj、stat** |
+| ② 静态/几何层 | lift 之后、融合之前 | `_last_bev`(RAW 单帧 BEV) | **seg、occ、box、stat、flow、lg、pl**(v24 起任务路由,与 warp 残差/运动重影隔离) |
+| ③ 运动/决策层(靠后) | 时空融合之后 | `_fused_bev`(crop/池化) | **risk、ego** |
+| ⑤ 混合 | fused + det 特征(detach) | `traj_stem(_fused_bev)` ⊕ `_det_feat.detach()` | **traj**(速度来自 fused,类别来自检测特征) |
 | ⑥ 时序特征层(最深) | 记忆融合内部 | `_tf` | **unk** |
-| ⑦ 特殊 | 单帧 BEV(冻结) | `_last_bev.detach()` | **lg**;pl 另在相机 BEV 侧 |
 
 **要点**:
 - **out 索引顺序 ≠ 计算顺序**:`out[0]=seg` 计算上在 occ 前(②层),`out[2]=seg2d` 反而最靠前(①层);out 编号按版本追加顺序(v17 加 bbox2d→5/6、v18 ego→7、v21 traj→9…),拓扑位置看"消费哪个特征";
+- **v24 任务路由(BEV 分割/occ/box 在 RAW BEV 的原因)**:静态任务(车道、占据)读 RAW BEV,与时空融合的 **warp 残差 + 运动目标重影**隔离;运动任务(risk/ego)保留融合 BEV 的速度线索;traj 混合两者(`traj_stem` 提供速度、det 特征提供类别,det 特征 detach 防轨迹损失扰动检测);
 - **depth 是图像侧头**:冻结的是 backbone 之后的深度估计头,经 lift 才进 BEV——所以会被下游 25 个 loss 经 lift 拉扯;
 - **flow 依赖 occ**:`flow_head(_occ_feat)` 读 occ stem 中间特征,是 occ 的旁支,不是独立主干;
-- **seg 用融合前静态 BEV**:融合 BEV 含 warp 残差/运动目标重影,车道几何需要干净输入。
+- **lg 冻结特征**:`_last_bev.detach()`——车道图损失早期大,梯度经共享 BEV 会毁掉其他任务(r20 教训)。
 
 ---
 
