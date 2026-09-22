@@ -160,6 +160,7 @@ def process_scene_export_t4(scene, args):
 
             traj_boxes = ztraj["boxes"]  # [64, 6]: (cls, xe, ye, l, w, yaw)
             traj_count = int(ztraj["count"])
+            traj_ids = ztraj["track_ids"] if "track_ids" in ztraj else None
             bev_3d = zbev["boxes_3d"] if "boxes_3d" in zbev else []
 
             # Match traj_boxes with bev_3d to obtain zc and height
@@ -171,7 +172,18 @@ def process_scene_export_t4(scene, args):
                         zc, h = b3[3], b3[6]
                         break
 
-                inst_token = f"{scene}_track_{k+1:04d}"
+                if traj_ids is not None:
+                    # Persistent SimpleTrack track id. SimpleTrack numbers each
+                    # class engine independently, so the token must combine
+                    # class + tid to be globally unique. This keeps the SAME
+                    # instance token for one physical object across frames,
+                    # views and occlusions (previously: per-frame row index).
+                    tid = int(traj_ids[k])
+                    inst_token = f"{scene}_track_{int(round(cls_id))}_{tid:05d}"
+                else:
+                    # Legacy fallback: per-frame sorted row index.
+                    inst_token = f"{scene}_track_{k+1:04d}"
+
                 corners = box_3d_corners(xe, ye, zc, l, w, h, yaw_b)
                 b3d_with_tokens.append({
                     "inst_token": inst_token,
@@ -232,7 +244,8 @@ def process_scene_export_t4(scene, args):
                     "sample_data_token": sample_data_token,
                     "instance_token": matched_token,
                     "category_token": cat_token,
-                    "bbox": [round(bx1, 2), round(by1, 2), round(bx2, 2), round(by2, 2)],
+                    "bbox": [float(round(bx1, 2)), float(round(by1, 2)),
+                             float(round(bx2, 2)), float(round(by2, 2))],
                     "mask": None
                 }
                 object_anns.append(ann_entry)

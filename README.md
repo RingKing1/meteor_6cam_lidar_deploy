@@ -104,6 +104,11 @@ meteor_6cam_lidar_deploy/
 │   ├── pip.conf                   # 国内清华 pip 镜像源
 │   └── sources.list.jammy         # Ubuntu 22.04 APT 镜像源
 │
+├── tools/                         # [部分 gitignore] 第三方库与工具工作区(2026-09-22 重组)
+│   ├── SimpleTrack-main/          # SimpleTrack (ICRA 2022) mot_3d 库,3D MOT 轨迹生成引擎
+│   │   └── venv_simpletrack/      # [gitignore] SimpleTrack 专用 py3.10 venv(运行环境)
+│   └── xcalib_calibration/        # XCalib 外参标定工作区(计划/脚本/配置入库,数据与 venv 忽略)
+│
 ├── checkpoints/                   # [已 gitignore] 微调权重保存目录 (best.pt 等)
 ├── engine/                        # [已 gitignore] TensorRT Engine 与 ONNX 导出目录
 ├── scenes/                        # [已 gitignore] 转换后用于训练的完整数据集目录
@@ -111,6 +116,39 @@ meteor_6cam_lidar_deploy/
 ├── videos/                        # [已 gitignore] 渲染生成的 1080p 全流程评测视频
 └── logs/                          # [已 gitignore] 各阶段运行日志与调试追踪文件
 ```
+
+---
+
+## 🎯 微调训练 Head 清单(epoch5 st5ep 微调,2026-09-22)
+
+> v52 模型(`DepthSegIPMNetV52`,从 `METEOR/models/meteor_v157.pt` 初始化)支持的全部 head。
+> 下表 = 本次 5-epoch 微调(SimpleTrack 新轨迹数据)实际开启/关闭的 head,含功能与真值(GT)来源。
+> 训练命令:见 `scripts/training_eval/run_finetune.py` 与 `logs/train_st5ep_nofr_*.log`。
+
+### ✅ 已开启训练(10 个,5 epoch / batch=1 / lr=1e-4)
+
+| Head | 权重 | 功能 | 真值来源 |
+|---|---|---|---|
+| `seg`(BEV 分割) | 1.0 | 自车周围 BEV 栅格 9 类语义分割 | `scenes/<s>/gt/`(`extract_gt.py` 由 LiDAR 投影生成) |
+| `seg2d`(2D 分割) | 0.4 | 多相机 2D 语义分割(21 类) | `seg2d21/`(`extract_seg2d.py`) |
+| `depth`(深度) | 0.3 | 相机深度估计(本轮 `--freeze-depth` 冻结) | `depth4/`(`extract_depth_gt.py`,LiDAR 投影) |
+| `occ`(occupancy) | 0.5 | BEV 占据体素 16 类栅格(±40m,200×200) | `occ/`(`extract_occ.py`,LiDAR 体素化) |
+| `ego`(E2E 规划) | 1.0 | 自车未来 3s 轨迹(6 航点,K=3 多模态)+ 运动学量 | `ego_motion.npz`(`extract_ego.py`,底盘/定位提取) |
+| `box`(3D 检测) | 0.5 | BEV 3D 检测(热图 hm + 框回归) | `bev_box_p` + `bev_box`(**phase3 三模态融合**:FocalFormer3D+YOLOv8x+Mask2Former 投票) |
+| `bbox2d`(2D 检测) | 0.3 | 多相机 2D 检测 | `bbox2d/`(同一融合脚本) |
+| `traj`(轨迹预测) | 0.5 | 每检测格子的未来 3s 轨迹(6×0.5s 偏移) | `agent_traj/`(**SimpleTrack MOT**:跨帧身份+未来航点) |
+| `stat`(静止标志) | 0.5 | 检测格子的动/静二分类 | 从 `agent_traj` 实时派生(3s 位移 ≤0.35m 静止 / ≥0.8m 运动) |
+| `tl`(交通灯) | 0.3 | 交通灯状态分类(none/green/yellow/red) | `tl_state.npz`(`extract_tl.py`) |
+
+### ⛔ 未开启(5 个)
+
+| Head | 状态 | 原因 | 数据/启用方式 |
+|---|---|---|---|
+| `risk`(风险场) | 可开 | 已生成 `risk_map.npz`(6 场景) | 加 `--risk-w 0.3`;⚠️ 先给 `dataset.py` 加 `_risk_cache` 缓存(当前每步解压 89MB,~0.7s/步) |
+| `flow`(运动流) | 可开 | 速度场 CPU 填充有少量开销 | 加 `--flow-w 0.2`(数据从 `agent_traj` 派生,零额外成本) |
+| `lanegraph`(车道图) | 缺数据 | 需矢量地图源渲染 | `extract_lanegraph.py` + sdmap |
+| `unk`(未知物) | 缺数据 | 需 `unknown_v2/v3` 提取 | `extract_unknown.py` |
+| `pl`(伪激光雷达) | 依赖 | 数据 `lidar_bev/` 已就绪,需 `--pseudo-lidar-w` | 独立蒸馏模式 |
 
 ---
 

@@ -78,18 +78,28 @@ crosswalk_test_vis/
 *.jpeg
 
 # ==============================================================================
-# XCalib Extrinsic Calibration Workspace
+# XCalib Extrinsic Calibration Workspace (under tools/ since 2026-09-22 reorg)
 # Keep the plan, source scripts, configs, and small summaries versioned; ignore
 # local environments and artifacts regenerated from raw_data.
 # ==============================================================================
-xcalib_calibration/.venv/
-xcalib_calibration/logs/
-xcalib_calibration/overlays/
-xcalib_calibration/converted/
-xcalib_calibration/detections/
-xcalib_calibration/baseline/
-xcalib_calibration/matches/
-xcalib_calibration/candidates/
-xcalib_calibration/validation/
-xcalib_calibration/index/frame_index.csv
-xcalib_calibration/index/sample_diagnostic_detailed.json
+tools/xcalib_calibration/.venv/
+tools/xcalib_calibration/logs/
+tools/xcalib_calibration/overlays/
+tools/xcalib_calibration/converted/
+tools/xcalib_calibration/detections/
+tools/xcalib_calibration/baseline/
+tools/xcalib_calibration/matches/
+tools/xcalib_calibration/candidates/
+tools/xcalib_calibration/validation/
+tools/xcalib_calibration/refined/
+tools/xcalib_calibration/index/frame_index.csv
+tools/xcalib_calibration/index/sample_diagnostic_detailed.json
+
+# ==============================================================================
+# SimpleTrack 3D MOT Integration (under tools/SimpleTrack-main/ since reorg)
+# The third-party mot_3d library and its local venv (tools/SimpleTrack-main/
+# venv_simpletrack) are regenerable; keep only our adapter scripts
+# (scripts/autolabel_agent_traj/*.py) versioned.
+# ==============================================================================
+tools/SimpleTrack-main/
+**/agent_traj_st/

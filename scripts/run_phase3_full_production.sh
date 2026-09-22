@@ -66,13 +66,17 @@ for SCENE in "${SCENES[@]}"; do
         --scenes "${SCENE}" \
         --focal-dir /work/meteor_6cam_lidar_deploy/box3d_artifacts/focalformer_bev_box_015 2>&1 | tee -a "${MASTER_LOG}"
 
-    # Step 3: 3D MOT & Agent Trajectory Generation
-    echo "[3/4] Running 3D MOT & 3.0s Future Trajectory for ${SCENE}..." | tee -a "${MASTER_LOG}"
-    docker run --rm \
-      -v "${WORK_DIR}:/work" \
-      meteor_training:v1 \
-      python3 /work/meteor_6cam_lidar_deploy/scripts/autolabel_agent_traj/build_agent_traj_gt.py \
+    # Step 3: 3D MOT & Agent Trajectory Generation (SimpleTrack engine)
+    # SimpleTrack (ICRA 2022, mot_3d) replaces the legacy MOTTracker3D:
+    # KF motion model + GIoU association + track lifecycle + two-stage
+    # occlusion redundancy. Runs in the host venv (CPU-only, ~1-2 min/scene).
+    # Legacy engine kept at scripts/autolabel_agent_traj/build_agent_traj_gt.py.
+    echo "[3/4] Running 3D MOT & 3.0s Future Trajectory for ${SCENE} (SimpleTrack)..." | tee -a "${MASTER_LOG}"
+    "${DEPLOY_DIR}/tools/SimpleTrack-main/venv_simpletrack/bin/python" \
+      "${DEPLOY_DIR}/scripts/autolabel_agent_traj/build_agent_traj_simpletrack.py" \
+        --root "${DEPLOY_DIR}/scenes" \
         --scenes "${SCENE}" \
+        --out-subdir agent_traj \
         --force 2>&1 | tee -a "${MASTER_LOG}"
 
     # Step 4: TIER IV t4dataset Instance Tracking Export

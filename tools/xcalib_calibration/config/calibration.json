@@ -2,7 +2,12 @@
   "image_width": 1920,
   "image_height": 1080,
   "image_already_undistorted": true,
+  "scene_image_width": 768,
+  "scene_image_height": 432,
+  "scene_image_scale": 0.4,
   "raw_data_dir": "../raw_data",
+  "scenes_dir": "../scenes",
+  "baseline_scene": "data_20260910_061820",
   "scenes": [
     "data_20260910_061820",
     "data_20260910_062659",
@@ -48,5 +53,29 @@
     "contact_sheet_camera": "front_wide",
     "contact_sheet_columns": 4,
     "thumbnail_width": 480
+  },
+  "baseline": {
+    "frames": 120,
+    "max_assignment_distance_px": 120.0,
+    "minimum_visible_corners": 4,
+    "minimum_camera_depth_m": 0.5
+  },
+  "matcher": {
+    "model": "crlite",
+    "site": "a9_dataset_r02_s01",
+    "device": "cuda",
+    "frames": 120,
+    "top_k": 3
+  },
+  "refinement": {
+    "score_threshold": 0.95,
+    "max_center_distance_px": 80.0,
+    "max_rotation_deg": 3.0,
+    "max_translation_m": 0.1,
+    "huber_delta_px": 10.0,
+    "max_iter": 200,
+    "validation_every": 5,
+    "min_train_pairs": 8,
+    "min_validation_pairs": 2
   }
 }

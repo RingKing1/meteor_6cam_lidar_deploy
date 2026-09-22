@@ -5,8 +5,13 @@ from pathlib import Path
 from typing import Any
 
 
+# Layout after the 2026-09-22 reorg: xcalib_calibration now lives under
+# meteor_6cam_lidar_deploy/tools/, i.e. one level deeper than before.
+#   __file__ = <deploy>/tools/xcalib_calibration/scripts/common_paths.py
+#   parents[1] = <deploy>/tools/xcalib_calibration        (CALIBRATION_DIR)
+#   parents[3] = <deploy>                                 (DEPLOY_DIR)
 CALIBRATION_DIR = Path(__file__).resolve().parents[1]
-DEPLOY_DIR = CALIBRATION_DIR.parent
+DEPLOY_DIR = Path(__file__).resolve().parents[3]
 WORKSPACE_DIR = DEPLOY_DIR.parent
 
 
