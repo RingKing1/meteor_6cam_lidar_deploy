@@ -100,6 +100,14 @@ def read_pcd_xyz(path):
     return data.reshape(n, 4)[:, :3].astype(np.float64)
 
 
+def filter_ego_body_points(pts):
+    """Filters out self-reflection LiDAR points hitting the ego vehicle body/hood/sensors."""
+    is_ego = (pts[:, 0] >= -2.2) & (pts[:, 0] <= 3.4) & \
+             (pts[:, 1] >= -1.0) & (pts[:, 1] <= 1.0) & \
+             (pts[:, 2] >= -0.2) & (pts[:, 2] <= 1.8)
+    return pts[~is_ego]
+
+
 def label_points_2d(pts_e, seg21, cams_calib):
     """Projects 3D points onto 6 cameras and samples 2D semantic maps with OCC_PRIO."""
     cls_pts = np.zeros(len(pts_e), dtype=np.uint8)
@@ -220,7 +228,7 @@ def process_single_frame(task_args):
     pcd_curr = read_pcd_xyz(pcd_curr_path)
     if len(pcd_curr) == 0:
         return None
-    pts_curr_e = pcd_curr @ R_el.T + t_el
+    pts_curr_e = filter_ego_body_points(pcd_curr @ R_el.T + t_el)
 
     seg_curr_path = os.path.join(scene_dir, "seg2d21", f"{fi:04d}.npz")
     seg21_curr = np.load(seg_curr_path)["seg"] if os.path.exists(seg_curr_path) else None
@@ -277,7 +285,7 @@ def process_single_frame(task_args):
         pcd_j = read_pcd_xyz(pcd_j_path)
         if len(pcd_j) == 0:
             continue
-        pts_j_e = pcd_j @ R_el.T + t_el
+        pts_j_e = filter_ego_body_points(pcd_j @ R_el.T + t_el)
 
         dist2 = pts_j_e[:, 0]**2 + pts_j_e[:, 1]**2
         valid = (dist2 < 70.0**2) & (pts_j_e[:, 2] > Z0) & (pts_j_e[:, 2] < Z1 + 1.0)
@@ -352,6 +360,17 @@ def process_single_frame(task_args):
     # 5. Ray-carving free space
     in_curr = (np.abs(pts_curr_e[:, 0]) < XH) & (np.abs(pts_curr_e[:, 1]) < YH) & (pts_curr_e[:, 2] >= Z0) & (pts_curr_e[:, 2] < Z1)
     ray_carve_free_space(occ, pts_curr_e[in_curr], t_el)
+
+    # 6. Explicitly clear residual obstacle voxels within ego vehicle physical volume
+    r_min = max(0, int((XH - 3.2) / VOX))
+    r_max = min(GX, int((XH - (-2.0)) / VOX) + 1)
+    c_min = max(0, int((YH - 1.0) / VOX))
+    c_max = min(GY, int((YH - (-1.0)) / VOX) + 1)
+    z_min = max(0, int((-0.2 - Z0) / VOX))
+    z_max = min(GZ, int((1.8 - Z0) / VOX) + 1)
+    ego_slice = occ[z_min:z_max, r_min:r_max, c_min:c_max]
+    ego_slice[(ego_slice > 0) & (ego_slice < 10)] = 0
+    occ[z_min:z_max, r_min:r_max, c_min:c_max] = ego_slice
 
     np.savez_compressed(occ_dst, occ=occ)
     return fi
