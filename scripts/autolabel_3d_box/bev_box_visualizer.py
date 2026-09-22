@@ -194,14 +194,20 @@ def render_frame(scene_dir, raw_dir, fi, out_path, cams_calib, R_el, t_el, pcd_f
     gt_png = cv2.imread(os.path.join(scene_dir, f"gt/{fi:04d}.png"), cv2.IMREAD_GRAYSCALE)
 
     bev_color = np.zeros((BEV_H, BEV_W, 3), dtype=np.uint8)
+    bev_color[:] = (20, 20, 24)  # dark background
     if gt_png is not None:
-        bev_color[gt_png == 1] = (60, 60, 60)       # Road drivable
-        bev_color[gt_png == 2] = (255, 255, 255)   # Lane divider
-        bev_color[gt_png == 3] = (0, 240, 255)     # Crosswalk
+        bev_color[gt_png == 1] = (65, 65, 70)       # Road drivable (dark slate)
+        bev_color[gt_png == 2] = (140, 80, 140)     # Sidewalk (pink/purple)
+        bev_color[gt_png == 3] = (0, 230, 255)      # Crosswalk (bright yellow)
+        bev_color[gt_png == 4] = (255, 255, 255)    # Laneline (pure white)
+        bev_color[gt_png == 5] = (40, 40, 240)      # Stopline (red)
+        bev_color[gt_png == 6] = (0, 140, 255)      # Road edge (orange)
+        bev_color[gt_png == 7] = (220, 210, 50)     # Markings (cyan)
+        bev_color[gt_png == 8] = (160, 90, 40)      # Parking (blue)
 
     if bev_box_png is not None:
-        bev_color[bev_box_png == 1] = (0, 220, 0)    # Vehicle
-        bev_color[bev_box_png == 2] = (0, 220, 255)  # VRU
+        bev_color[bev_box_png == 1] = (0, 220, 0)    # Vehicle (lime green)
+        bev_color[bev_box_png == 2] = (0, 220, 255)  # VRU (cyan)
 
     # Ego vehicle
     ego_col, ego_row = int(BEV_YH / RES), int(BEV_XH / RES)
@@ -211,6 +217,22 @@ def render_frame(scene_dir, raw_dir, fi, out_path, cams_calib, R_el, t_el, pcd_f
     bev_panel = cv2.resize(bev_color, (int(cams_grid.shape[0] * (BEV_W / BEV_H)), cams_grid.shape[0]), interpolation=cv2.INTER_NEAREST)
     cv2.putText(bev_panel, f"BEV GT (Frame {fi})", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
     cv2.putText(bev_panel, f"Objects: {len(boxes_3d)} confirmed", (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 1)
+
+    # Add legend at bottom
+    legend_items = [
+        ("Road", (65, 65, 70)),
+        ("Lane", (255, 255, 255)),
+        ("Cross", (0, 230, 255)),
+        ("Walk", (140, 80, 140)),
+        ("Veh", (0, 220, 0)),
+        ("VRU", (0, 220, 255)),
+    ]
+    lx = 15
+    ly = bev_panel.shape[0] - 20
+    for name, col in legend_items:
+        cv2.rectangle(bev_panel, (lx, ly - 12), (lx + 14, ly + 2), col, -1)
+        cv2.putText(bev_panel, name, (lx + 18, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (240, 240, 240), 1, cv2.LINE_AA)
+        lx += 86
 
     canvas = np.hstack([cams_grid, bev_panel])
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
