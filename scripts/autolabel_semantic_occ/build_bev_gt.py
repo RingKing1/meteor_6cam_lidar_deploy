@@ -273,10 +273,27 @@ def process_scene(raw_dir, scene_dir, workers=8, limit=0):
     # Step 4: Rasterize global semantic map
     # Area classes: argmax
     map_raster = np.argmax(counts, axis=0).astype(np.uint8)
-    
-    # Thin classes override with threshold >= 2 hits
+
+    # Fine-tune: Extract crosswalk (Class 3) connected components to form solid, continuous rectangles
+    # On MAP_RES=0.1m grid, zebra stripe gaps (0.6m~1.2m) are 6~12 pixels.
+    cw_seed = ((map_raster == 3) | (counts[3] >= 2)).astype(np.uint8)
+    kernel_cw = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+    cw_closed = cv2.morphologyEx(cw_seed, cv2.MORPH_CLOSE, kernel_cw)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cw_closed)
+    solid_cw = np.zeros_like(cw_seed, dtype=bool)
+    for lbl in range(1, num_labels):
+        if stats[lbl, cv2.CC_STAT_AREA] >= 150:  # >= 1.5 m^2 (150 cells @ 0.1m)
+            solid_cw[labels == lbl] = True
+
+    # Seal crosswalk as solid class 3
+    map_raster[solid_cw] = 3
+
+    # Thin classes override with threshold >= 2 hits (shield crosswalk from class 4 override)
     for tid in (6, 5, 7, 4):  # road_edge, stopline, marking, laneline (highest priority)
         override = counts[tid] >= 2
+        if tid == 4:
+            # Shield crosswalk connected components: keep crosswalk solid yellow
+            override = override & (~solid_cw)
         map_raster[override] = tid
 
     # Step 5: Crop per-frame BEV GT in parallel
