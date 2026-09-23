@@ -122,7 +122,17 @@ meteor_6cam_lidar_deploy/
 │   ├── build.sh                   # 自动化镜像一键构建脚本 (meteor_trt10_cu124_py310:v1)
 │   ├── run.sh                     # 容器启动与工作空间挂载脚本
 │   ├── pip.conf                   # 国内清华 pip 镜像源
-│   └── sources.list.jammy         # Ubuntu 22.04 APT 镜像源
+│   ├── sources.list.jammy         # Ubuntu 22.04 APT 镜像源
+│   ├── convert_custom.py          # 自采数据 → METEOR 场景转换(容器内)
+│   ├── infer_custom.py            # 自定义场景端到端推理
+│   ├── smoke_infer.py             # 容器内推理冒烟测试
+│   ├── dl_dataset.py              # 数据集下载辅助
+│   └── README_custom.md           # 自定义部署备忘
+│
+├── patches/meteor_train/          # METEOR 训练脚本本地修改快照(上游仓库无推送权限)
+│   ├── meteor_changes_20260923.patch # 全部改动 diff(no_grad/resume/存档/val-full + 6 相机适配)
+│   ├── train.py / dataset.py / model.py / orin_render.py # 4 个源文件副本
+│   └── README.md                  # 改动清单与应用方法
 │
 ├── tools/                         # [部分 gitignore] 第三方库与工具工作区(2026-09-22 重组)
 │   ├── SimpleTrack-main/          # SimpleTrack (ICRA 2022) mot_3d 库,3D MOT 轨迹生成引擎
