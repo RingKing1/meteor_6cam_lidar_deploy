@@ -78,7 +78,7 @@
 | 2 | 三个 INT8 探针工具**适配 6 相机**并入库 | ✅ `../meteor_deploy/`(rig 从 manifest 动态读、`--n-cams`、路径参数化) |
 | 3 | 摘取 `--stop` 修复(2 行) | ⏸ 待定(需改 `deploy/orin/demo_public6.sh`,我们当前无 demo 流程) |
 | 4 | 摘取 `closed_loop_eval --list/--intent` | ⏸ 待定(评测增强,建议等训练收尾后做) |
-| 5 | VLA 部分 | ❌ 不引入(无 VLA 训练产物与需求) |
+| 5 | VLA 部分 | 📦 **已归档为拓展** → `../meteor_vla/`(2 个运行时文件 + patch + README;原样保存**不启用**:缺 VLA 训练产物与训练侧代码,PR 内不含) |
 | 6 | 整分支合并 | ❌ 不建议(冲突面大、A 线无用) |
 
 ## 五、冲突与风险提醒
