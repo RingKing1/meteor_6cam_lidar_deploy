@@ -59,6 +59,8 @@ meteor_6cam_lidar_deploy/
 │
 ├── doc/                           # 核心技术文档中心
 │   ├── MODEL_ARCHITECTURE.md      # 51.83M 模型 30 层逐层规格与时空记忆架构说明书
+│   ├── VAL_METRICS_GLOSSARY.md    # 🌟 验证指标词典:val 输出逐项解释 + 易误读点 + ep2 读数示范
+│   ├── simpletrack_ab_report.md   # SimpleTrack 替换自研 MOT 的 A/B 对比报告
 │   ├── AUTOLABEL_UPGRADE_PLAN.md  # 3D Box 与红绿灯自动化标注升级方案技术全量设计
 │   ├── DATASET_AUTOLABEL_PLAN.md  # 零人工标注全自动数据生产流水线规划方案
 │   └── README.md                  # 快速使用备忘
@@ -424,6 +426,8 @@ docker exec -it meteor_run python3 /work/meteor_6cam_lidar_deploy/scripts/traini
 ## 📖 详细技术文档
 
 - 📐 **[完整网络架构与逐层规格说明书 (doc/MODEL_ARCHITECTURE.md)](doc/MODEL_ARCHITECTURE.md)**：包含 30 个网络模块的详细参数量统计、各层输入输出张量形状、时空记忆队列公式与 TensorRT 部署防坑指南。
+- 📊 **[验证指标词典 (doc/VAL_METRICS_GLOSSARY.md)](doc/VAL_METRICS_GLOSSARY.md)**：epoch-end val 每一行的逐项解释(BEV/2D seg、3D det 的 `R50`/`Rn`、Stat/Traj/TL/E2E/HS),含 5 个易误读点(`acc` 双关、`x{ratio}`、`n` 小样本陷阱)、ep2 全量读数示范与代码出处。
+- 🔄 **[SimpleTrack 替换 A/B 报告 (doc/simpletrack_ab_report.md)](doc/simpletrack_ab_report.md)**：SimpleTrack(ICRA 2022)替换自研 MOT 的对比数据、配置与产物清单。
 - ⚙️ **[零人工全自动标注管线规划方案 (doc/DATASET_AUTOLABEL_PLAN.md)](doc/DATASET_AUTOLABEL_PLAN.md)**：详细阐述 2D 全景伪标签选型、ENU 投影对齐算法及点云稠密化生成逻辑。
 - 📝 **[工程使用备忘录 (doc/README.md)](doc/README.md)**：记录原始坐标系映射链条与快速冒烟命令。
 
