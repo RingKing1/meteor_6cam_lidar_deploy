@@ -1,0 +1,290 @@
+diff --git a/bevlane/train.py b/bevlane/train.py
+index 5426ce8..bc2b74d 100644
+--- a/bevlane/train.py
++++ b/bevlane/train.py
+@@ -660,11 +660,22 @@ def _temporal_inputs(model, batch, device, tmp_idx):
+     return pb, make_warp_theta(rel)
+ 
+ 
++@torch.no_grad()
+ def evaluate_ego(model, loader, device, ego_idx, max_batches=40,
+                  batch_stride=1, shard=(0, 1), raw=False,
+                  tmp_idx=None):
+     """E2E head metrics: trajectory ADE/FDE [m], steer MAE [rad],
+-    accel MAE [m/s^2], brake accuracy. Valid frames only."""
++    accel MAE [m/s^2], brake accuracy. Valid frames only.
++
++    2026-09-23: added @torch.no_grad(). This was the ONLY evaluate_* without
++    it (every other evaluate_* already had it). `model.eval()` does not
++    disable autograd and `torch.autocast` only lowers precision, so the full
++    19-head forward below built a complete graph and kept every activation
++    resident waiting for a backward that never comes -> measured +13 GB
++    spike, enough to walk the epoch-end val from 11 GB to 24 GB and OOM on
++    the 24 GB 4090 (and to tip the in-training probeE2E over 44 GB). With the
++    graph not built the val step's real footprint is ~3.1 GB.
++    """
+     model.eval()
+     n = ade = fde = smae = amae = bacc = 0.0
+     nc = adec = 0.0
+@@ -797,7 +808,11 @@ def evaluate_tl(model, loader, device, tl_idx, max_batches=40, tmp_idx=None):
+             break
+         pred = out[11].float().argmax(1).cpu()
+         for p, g in zip(pred.tolist(), tg.tolist()):
+-            if g == 255:
++            while isinstance(p, list):
++                p = p[0] if len(p) > 0 else 0
++            while isinstance(g, list):
++                g = g[0] if len(g) > 0 else 255
++            if g == 255 or g < 0 or g >= 4:
+                 continue
+             tot[g] += 1
+             hit[g] += int(p == g)
+@@ -992,6 +1007,7 @@ def evaluate_unknown(model, loader, device, uk_idx, max_batches=20,
+     return {"p": tp / max(tp + fp, 1), "r": tp / max(tp + fn, 1)}
+ 
+ 
++@torch.no_grad()
+ def evaluate_unknown_dense(model, loader, device, um_idx, max_batches=20,
+                            tmp_idx=None, thresh=0.3):
+     """dense small-obstacle occupancy: object-level P/R (2 m centroid match
+@@ -1061,8 +1077,18 @@ def evaluate_unknown_dense(model, loader, device, um_idx, max_batches=20,
+             "r_far": tp_f / max(tp_f + fn_f, 1)}
+ 
+ 
++@torch.no_grad()
+ def evaluate_traj(model, loader, device, tj_idx, max_batches=40,
+                   tmp_idx=None):
++    """Agent-trajectory metrics.
++
++    2026-09-23: added @torch.no_grad(). This was the function that actually
++    killed the epoch-end val: it runs right after [valStat-cal] (train.py:3766)
++    and, with autograd enabled, built the full 19-head graph for every val
++    sample -> the "[val ep0] SKIPPED (OOM)" line appears immediately after
++    valStat-cal with no [valTraj] line ever printed. evaluate_ego had the same
++    omission (fixed too); evaluate_unknown_dense was the third.
++    """
+     _STAT = [0, 0]
+     _pc = [0.0, 0.0]; _pn = [0, 0]        # per-class ADE (veh, vru)
+     _hd = [0.0, 0.0]; _hn = [0, 0]        # per-class heading error @3s
+@@ -1559,7 +1585,7 @@ def main():
+                     help="extra weight on the +3.0 s waypoint of the "
+                          "SELECTED candidate, added on top of the "
+                          "per-step loss. Re-weighting the profile "
+-                         "instead (r56, flat EGO_TW) cost 18 % of ADE "
++                         "instead (r56, flat EGO_TW) cost 18 %% of ADE "
+                          "and ADEc; this adds supervision without "
+                          "removing any.")
+     ap.add_argument("--ego-w", type=float, default=0.0,
+@@ -1653,6 +1679,15 @@ def main():
+                     help="override the val scenes with a fixed list (for holdout evaluation)")
+     ap.add_argument("--val-batch", type=int, default=0,
+                     help="batch for the val loaders (default: max(train batch, 2)); evaluation is no-grad, so it should not shrink with the training batch -- at batch 1 the capped evals covered half the samples and the rare curve subset (ADEc) hit zero -> nan")
++    ap.add_argument("--val-full", action="store_true",
++                    help="evaluate the ENTIRE val set at epoch end instead of a "
++                         "subsample (2026-09-23). Removes all three throttles: "
++                         "max_per_scene (dataset), the dv_ep stride, and the "
++                         "per-evaluator max_batches caps. Measured cost on the "
++                         "24 GB 4090: ~75-80 min per epoch-end val for 2970 "
++                         "frames x ~9 evaluators (batch size does not change "
++                         "throughput -- the GPU is already saturated -- so "
++                         "batch 1 is used and the peak is only ~3.5 GB).")
+     ap.add_argument("--sync-bn", action="store_true",
+                     help="SyncBatchNorm: needed when the batch per GPU drops to 1")
+     ap.add_argument("--grad-ckpt", action="store_true",
+@@ -1768,6 +1803,14 @@ def main():
+                     help="soft-clDice weight for laneline connectivity")
+     ap.add_argument("--seg-w", type=float, default=1.0)
+     ap.add_argument("--init-ckpt", default="")
++    ap.add_argument("--resume", default="", help="full-state checkpoint to "
++                    "CONTINUE training from (model + optimizer + OneCycleLR + "
++                    "AMP scaler + epoch). Unlike --init-ckpt (weights only, "
++                    "fresh optimizer and LR schedule), this restores the exact "
++                    "optimisation state and starts at the next epoch. Use the "
++                    "last.pt / ep{N}.pt written by this script (2026-09-23). "
++                    "For older weight-only checkpoints the LR is re-aligned to "
++                    "the completed-step position on a best-effort basis.")
+     ap.add_argument("--depth-bins", type=int, default=64,
+                     help="number of depth head bins (Orin 48bin lever. Anything but 64 "
+                          "drops the init's depth head and retrains it)")
+@@ -1826,6 +1869,8 @@ def main():
+     ap.add_argument("--gt-key", default="gt", choices=["gt", "gt_vec", "gt_cons"],
+                     help="gt = raster autolabel; gt_vec = hybrid vector-line GT")
+     args = ap.parse_args()
++    if args.stat_w is None:
++        args.stat_w = args.traj_w
+     if getattr(args, "det_head_only", False):
+         args.det_only = True          # losses are dropped the same way as det-only
+     if getattr(args, "det_only", False):
+@@ -1932,7 +1977,9 @@ def main():
+     # per epoch by EpochSubsetSampler so each epoch sees fresh frames.
+     if True:   # all ranks: the distributed ADE probe shards the val set
+         # val never needs depth GT (BEV mIoU eval only) -> with_depth=False
+-        va = BevLaneDataset(args.root, val_s, max_per_scene=8, gt_key=args.gt_key,
++        va = BevLaneDataset(args.root, val_s,
++                            max_per_scene=(None if args.val_full else 8),
++                            gt_key=args.gt_key,
+                             img_scale=args.img_scale,
+                             dontcare_sidewalk=args.dontcare_sidewalk,
+                             with_depth=False, with_seg2d=use_seg2d,
+@@ -1970,9 +2017,13 @@ def main():
+         # like a regression (0.318 -> 0.000) while a direct measurement on the
+         # same weights showed it IMPROVING (IoU 0.101 -> 0.168). Scale the caps
+         # so the sample count, and therefore comparability with r47, is fixed.
+-        vcap = lambda n: max(1, int(round(n * 2.0 / vb)))   # noqa: E731
++        # --val-full lifts the per-evaluator batch caps so the WHOLE val set is
++        # measured; otherwise keep the sample-count-fixed cap (see above).
++        # (va_ep is defined below; the lambda is evaluated only at val time.)
++        vcap = (lambda n: len(va_ep) + 1) if args.val_full else \
++            (lambda n: max(1, int(round(n * 2.0 / vb))))   # noqa: E731
+         dv = DataLoader(va, batch_size=vb, shuffle=False,
+-                        num_workers=4 if is_main else 1, pin_memory=is_main)
++                        num_workers=min(args.workers, 4 if is_main else 1), pin_memory=is_main)
+         # Epoch-end val used to read the FIRST `max_batches` batches of `dv`,
+         # i.e. the head of the list: 10 of 270 scenes at val_batch 2, and only
+         # 5 (with ZERO turn frames, hence ADEc=nan) at val_batch 1. Every
+@@ -1981,10 +2032,11 @@ def main():
+         # spans all 270 val scenes; deterministic, so epochs stay comparable.
+         # dv itself is left alone: the in-epoch probe does its own striding and
+         # shards across ranks.
+-        _st = max(1, len(va) // max(80 * 2 // max(vb, 1), 1))
++        _st = 1 if args.val_full else \
++            max(1, len(va) // max(80 * 2 // max(vb, 1), 1))
+         va_ep = torch.utils.data.Subset(va, list(range(0, len(va), _st)))
+         dv_ep = DataLoader(va_ep, batch_size=vb, shuffle=False,
+-                           num_workers=4 if is_main else 1, pin_memory=is_main)
++                           num_workers=min(args.workers, 4 if is_main else 1), pin_memory=is_main)
+         if is_main:
+             _sc = {va.items[i][0] for i in va_ep.indices}
+             print(f"[val] epoch-end slice: {len(va_ep)} samples over "
+@@ -2016,7 +2068,7 @@ def main():
+             if _hs_idx:
+                 dv_hs = DataLoader(torch.utils.data.Subset(va, _hs_idx),
+                                    batch_size=vb, shuffle=False,
+-                                   num_workers=2 if is_main else 1,
++                                   num_workers=min(args.workers, 2 if is_main else 1),
+                                    pin_memory=is_main)
+             if is_main:
+                 print(f"[val] high-speed slice: {len(_hs_idx)} frames "
+@@ -2025,7 +2077,8 @@ def main():
+         if use_lidar:
+             # separate minimal loader (imgs,K,T,gt,depth4) so the main val
+             # batch layout (indexed positionally everywhere) is untouched
+-            va_lid = BevLaneDataset(args.root, val_s, max_per_scene=8,
++            va_lid = BevLaneDataset(args.root, val_s,
++                                    max_per_scene=(None if args.val_full else 8),
+                                     gt_key=args.gt_key, with_depth=True,
+                                     img_scale=args.img_scale,
+                                     with_lidarbev=use_lidarbev,
+@@ -2034,7 +2087,7 @@ def main():
+                                     n_cams=args.n_cams,
+                                     use_gt_valid=args.gt_valid)
+             dv_lid = DataLoader(va_lid, batch_size=vb, shuffle=False,
+-                                num_workers=2, pin_memory=True)
++                                num_workers=min(args.workers, 2), pin_memory=True)
+ 
+     if args.limit_train and args.limit_train < len(tr):
+         weights = None
+@@ -2854,7 +2907,74 @@ def main():
+     val2d_miou = None   # seg2d survival guard (2026-08-28)
+     best_chain = 1e9    # EMA ckpt with the lowest chain proxy (ADEc + |high-speed wp0 bias|)
+ 
+-    for ep in range(args.epochs):
++    # ---- full-state checkpoint + resume (2026-09-23) ----------------------
++    # Before this, checkpoints held weights only, so an interrupted 5-epoch
++    # round could not be continued: --init-ckpt restarts Adam and the
++    # OneCycleLR schedule from zero. Every epoch now also writes ep{N}.pt with
++    # the optimisation state, and --resume restores it exactly.
++    def _ckpt_payload(net_, ep_, ious_):
++        return {"model": (net_.module if hasattr(net_, "module")
++                          else net_).state_dict(),
++                "epoch": ep_, "ious": ious_ if ious_ is not None else {},
++                "args": vars(args), "git": _GIT,
++                "optimizer": opt.state_dict(),
++                "scheduler": sched.state_dict(),
++                "scaler": scaler.state_dict(),
++                "best": best, "best_e2e": best_e2e, "best_chain": best_chain}
++
++    def _save_full(net_, ep_, ious_):
++        """last.pt (rolling) + ep{N}.pt (per-epoch archive, never overwritten)."""
++        _p = _ckpt_payload(net_, ep_, ious_)
++        torch.save(_p, os.path.join(args.out, "last.pt"))
++        torch.save(_p, os.path.join(args.out, f"ep{ep_}.pt"))
++
++    start_epoch = 0
++    if args.resume:
++        _r = torch.load(args.resume, map_location="cpu", weights_only=False)
++        _sd = _r.get("model", _r)
++        _nres = model.module if hasattr(model, "module") else model
++        _m, _u = _nres.load_state_dict(_sd, strict=False)
++        _done = int(_r.get("epoch", -1)) + 1
++        start_epoch = max(0, _done)
++        _got = []
++        if "optimizer" in _r:
++            try:
++                opt.load_state_dict(_r["optimizer"]); _got.append("optimizer")
++            except Exception as _e:                       # noqa: BLE001
++                print(f"[resume] optimizer state NOT restored: {_e}", flush=True)
++        if "scheduler" in _r:
++            try:
++                sched.load_state_dict(_r["scheduler"]); _got.append("scheduler")
++            except Exception as _e:                       # noqa: BLE001
++                print(f"[resume] scheduler state NOT restored: {_e}", flush=True)
++        if "scaler" in _r:
++            try:
++                scaler.load_state_dict(_r["scaler"]); _got.append("scaler")
++            except Exception:                             # noqa: BLE001
++                pass
++        if "best" in _r:
++            best = float(_r["best"])
++        if "best_e2e" in _r:
++            best_e2e = float(_r["best_e2e"])
++        if "best_chain" in _r:
++            best_chain = float(_r["best_chain"])
++        if "scheduler" not in _r and _done > 0:
++            # weight-only checkpoint (e.g. an ep{N}.pt from before this change):
++            # jump OneCycleLR to the completed-step position so the LR picks up
++            # where it left off instead of re-warming up.
++            _steps = min(_done * len(dl), total_steps - 1)
++            try:
++                sched.last_epoch = _steps
++                sched.step()
++            except Exception as _e:                       # noqa: BLE001
++                print(f"[resume] LR re-align failed: {_e}", flush=True)
++        if is_main:
++            print(f"[resume] {args.resume} ckpt_epoch={_r.get('epoch')} "
++                  f"missing={len(_m)} unexpected={len(_u)} "
++                  f"restored={_got or 'weights-only'} -> start at ep{start_epoch} "
++                  f"lr={opt.param_groups[0]['lr']:.2e}", flush=True)
++
++    for ep in range(start_epoch, args.epochs):
+         if sampler:
+             sampler.set_epoch(ep)
+         for batch in dl:
+@@ -3939,9 +4059,7 @@ def main():
+                                   "saved", flush=True)
+                 finally:
+                     ema.swap_out(net, _bk)
+-            torch.save({"model": net.state_dict(), "epoch": ep,
+-                        "ious": ious, "args": vars(args), "git": _GIT},
+-                       os.path.join(args.out, "last.pt"))
++            _save_full(net, ep, ious)
+             # composite best: BEV mIoU minus a small penalty for E2E curve
+             # error, so "best" never selects a pre-curve-convergence epoch
+             score = miou
+@@ -3976,6 +4094,16 @@ def main():
+             # never let the epoch-end evaluation kill the round
+             print(f'[val ep{ep}] SKIPPED (OOM)', flush=True)
+             torch.cuda.empty_cache()
++            # ...and never lose the epoch's weights either (2026-09-23). The
++            # saves used to live only inside the try, so five consecutive OOM
++            # rounds left an EMPTY checkpoint directory (9.5 h of training lost).
++            try:
++                _netf = locals().get("net") or (model.module if ddp else model)
++                _save_full(_netf, ep, locals().get("ious"))
++                print(f"[val ep{ep}] weights force-saved after OOM "
++                      f"(last.pt + ep{ep}.pt)", flush=True)
++            except Exception as _e:                       # noqa: BLE001
++                print(f"[val ep{ep}] force-save failed: {_e}", flush=True)
+         if ddp:
+             dist.barrier()
+     if is_main:
