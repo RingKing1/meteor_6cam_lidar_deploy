@@ -12,6 +12,24 @@
 三者的共同用途:**回答"INT8 量化会不会把细车道线吃掉"**,并定位是量化、是校准、还是
 输入几何的问题。
 
+### `docker/` —— 部署容器资产(原样归档)
+
+上游 METEOR 仓库 `docker/` 的 10 个通用文件(本地 METEOR commit `1203fa3`,因上游无推送权限,
+在此做远端备份;sha256 已与 METEOR 工作区逐一核对一致):
+
+| 文件 | 用途 |
+|---|---|
+| `Dockerfile` | CUDA 12.4 + TensorRT 10.3 + ONNXRuntime 运行底座 |
+| `build.sh` / `run.sh` | 镜像构建 / 容器启动(挂载工作区) |
+| `pip.conf` / `sources.list.jammy` | 国内 pip / Ubuntu 22.04 apt 镜像源 |
+| `convert_custom.py` | 自采数据 → METEOR 场景转换 |
+| `infer_custom.py` / `smoke_infer.py` | 端到端推理 / 单帧冒烟测试 |
+| `dl_dataset.py` | 数据集下载辅助 |
+| `README_custom.md` | 自采数据部署备忘 |
+
+> 这些文件是**原样归档**(未做 6 相机适配):`convert_custom.py` 等按 8 相机 `CAMS` 编写,
+> 用在我们的 6 相机 rig 前需核对相机列表(参考本项目 `scripts/autolabel_ego_motion/convert_custom.py`)。
+
 ---
 
 ## ⚠️ 部署防坑要点(上游 §6.x 实测结论,直接适用)
