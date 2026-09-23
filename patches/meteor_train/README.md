@@ -12,6 +12,7 @@
 | 基线 commit | `dc193a8`(English-only source tree) |
 | 本地 commit ① | `57ef360` — train.py:no_grad 修复 + resume + 存档 + val-full |
 | 本地 commit ② | `9702345` — 6 相机适配 + OCC 顶视图渲染 |
+| 本地 commit ③ | `8d37459` — `--val-workers`:val 数据加载并行(需 `--ipc=host`) |
 | License | Apache License 2.0(见 `LICENSE-METEOR-Apache-2.0`) |
 
 ## 目录内容
@@ -22,7 +23,7 @@
 | `dataset.py` | `bevlane/dataset.py` | 数据加载(含 6 相机 seg2d 补齐、bev_box_p 保护) |
 | `model.py` | `bevlane/model.py` | 网络定义(含 tl_head 6 相机零分支) |
 | `orin_render.py` | `deploy/orin_render.py` | Orin 渲染(含 OCC 顶视图新函数) |
-| `meteor_changes_20260923.patch` | — | **全部改动的 diff**(275 insertions / 42 deletions,4 文件) |
+| `meteor_changes_20260923.patch` | — | **全部改动的 diff**(300 insertions / 43 deletions,4 文件) |
 | `LICENSE-METEOR-Apache-2.0` | `LICENSE` | 上游许可副本(复制源码时保留) |
 
 ## 改动清单
@@ -64,8 +65,24 @@ val 阶段 OOM 时**强制补存**该 epoch 权重(此前 OOM 会跳过整个保
 | ② dv_ep | `_st = len(va)//160` | 抽稀到 ~165 帧 | `_st = 1`(不抽稀) |
 | ③ 各评估 | `max_batches=vcap(n)` | 20~166 批次封顶 | `len(va_ep)+1`(放开) |
 
-**代价(实测)**:2970 帧 × ~9 个评估 ≈ **75-80 分钟/次**;batch 大小**不改变**吞吐
-(GPU 已饱和),故用 batch 1,峰值仅 ~3.5 GB。
+**代价(实测)**:2970 帧 × ~9 个评估 ≈ **75-80 分钟/次**(旧配置,单进程读图);batch 大小
+**不改变**吞吐(GPU 已饱和),故用 batch 1,峰值仅 ~3.5 GB。
+
+#### A5. `--val-workers` val 数据加载并行(commit `8d37459`)
+
+`--val-full` 打开后发现 val 的 4 个 DataLoader 共用训练的 `--workers`(=0,为规避 depth 张量的
+共享内存问题)→ **单进程解码 ~71,208 张图**(2967 帧 × 24 张:6 当前 + 18 历史),GPU 长期只有
+2~47% 利用率,val 的 75-80 分钟几乎全是 CPU 读图。
+
+| 改动 | 说明 |
+|---|---|
+| 新增 `--val-workers`(默认 0 = 跟随 `--workers`) | val loader 与训练 loader **worker 数解耦**;val 是 `with_depth=False` + batch 1,worker 安全 |
+| `persistent_workers=True` + `prefetch_factor=4`(workers>0 时) | val 要跑 ~9 个 evaluator,每个都重新迭代同一 loader,worker 池需常驻 |
+
+> 🔴 **硬依赖**:`--val-workers > 0` 必须给容器**真实的 `/dev/shm`** —— 启动加 **`--ipc=host`**
+> (或 `--shm-size=8g`)。Docker 默认 `/dev/shm` = **64 MB**,8 workers × prefetch 4 × 24 张/样本
+> 需要约 **1 GB**,否则报 `DataLoader worker ... Bus error`(实测:batch=2 验证时正是死在
+> 这个错误上,而不是 CUDA OOM)。
 
 ### B. 6 相机适配(commit `9702345`)
 

@@ -1688,6 +1688,20 @@ def main():
                          "frames x ~9 evaluators (batch size does not change "
                          "throughput -- the GPU is already saturated -- so "
                          "batch 1 is used and the peak is only ~3.5 GB).")
+    ap.add_argument("--val-workers", type=int, default=0,
+                    help="DataLoader workers for the VAL loaders (2026-09-23; default 0 = follow "
+                         "--workers). Val is with_depth=False with batch 1, so worker processes are "
+                         "safe here, and they matter: the training loader keeps --workers 0 to dodge "
+                         "the depth-tensor shared-memory issue, but the full-val pass is IO-bound "
+                         "(2967 frames x 24 images = ~71k cv2.imread calls per evaluator) and with 0 "
+                         "workers the GPU sat at 2-47%% utilisation while one process decoded. "
+                         "Measured on the 4090: epoch-end val went from ~75-80 min to a few minutes "
+                         "with --val-workers 4-8 (each of the ~9 evaluators also re-iterates the "
+                         "loader, so persistent_workers is enabled with it). "
+                         "IMPORTANT: >0 workers need a real /dev/shm -- run the container with "
+                         "--ipc=host (or --shm-size=8g). The default 64 MB /dev/shm dies with "
+                         "'DataLoader worker ... Bus error' (measured: 8 workers x prefetch 4 x "
+                         "24 images/sample needs ~1 GB).")
     ap.add_argument("--sync-bn", action="store_true",
                     help="SyncBatchNorm: needed when the batch per GPU drops to 1")
     ap.add_argument("--grad-ckpt", action="store_true",
@@ -2022,8 +2036,18 @@ def main():
         # (va_ep is defined below; the lambda is evaluated only at val time.)
         vcap = (lambda n: len(va_ep) + 1) if args.val_full else \
             (lambda n: max(1, int(round(n * 2.0 / vb))))   # noqa: E731
+        # --val-workers (2026-09-23): the VAL loaders get their own worker count.
+        # The training loader keeps --workers (0 on this rig, to avoid the
+        # depth-tensor shared-memory collate failure), but val is
+        # with_depth=False + batch 1 and is pure IO: without workers the
+        # full-val pass decoded ~71k images in one process and left the GPU at
+        # 2-47 %. persistent_workers keeps the pool alive across the ~9
+        # evaluators that each re-iterate the same loader.
+        _vw = args.val_workers if args.val_workers > 0 else args.workers
+        _val_nw = (lambda cap: min(_vw, cap)) if _vw > 0 else (lambda cap: 0)   # noqa: E731
+        _vkw = dict(persistent_workers=True, prefetch_factor=4) if _vw > 0 else {}
         dv = DataLoader(va, batch_size=vb, shuffle=False,
-                        num_workers=min(args.workers, 4 if is_main else 1), pin_memory=is_main)
+                        num_workers=_val_nw(4), pin_memory=is_main, **_vkw)
         # Epoch-end val used to read the FIRST `max_batches` batches of `dv`,
         # i.e. the head of the list: 10 of 270 scenes at val_batch 2, and only
         # 5 (with ZERO turn frames, hence ADEc=nan) at val_batch 1. Every
@@ -2036,7 +2060,7 @@ def main():
             max(1, len(va) // max(80 * 2 // max(vb, 1), 1))
         va_ep = torch.utils.data.Subset(va, list(range(0, len(va), _st)))
         dv_ep = DataLoader(va_ep, batch_size=vb, shuffle=False,
-                           num_workers=min(args.workers, 4 if is_main else 1), pin_memory=is_main)
+                           num_workers=_val_nw(4), pin_memory=is_main, **_vkw)
         if is_main:
             _sc = {va.items[i][0] for i in va_ep.indices}
             print(f"[val] epoch-end slice: {len(va_ep)} samples over "
@@ -2068,8 +2092,8 @@ def main():
             if _hs_idx:
                 dv_hs = DataLoader(torch.utils.data.Subset(va, _hs_idx),
                                    batch_size=vb, shuffle=False,
-                                   num_workers=min(args.workers, 2 if is_main else 1),
-                                   pin_memory=is_main)
+                                   num_workers=_val_nw(2),
+                                   pin_memory=is_main, **_vkw)
             if is_main:
                 print(f"[val] high-speed slice: {len(_hs_idx)} frames "
                       f"(v0>=8 m/s) for wp0 bias", flush=True)
@@ -2087,7 +2111,7 @@ def main():
                                     n_cams=args.n_cams,
                                     use_gt_valid=args.gt_valid)
             dv_lid = DataLoader(va_lid, batch_size=vb, shuffle=False,
-                                num_workers=min(args.workers, 2), pin_memory=True)
+                                num_workers=_val_nw(2), pin_memory=True, **_vkw)
 
     if args.limit_train and args.limit_train < len(tr):
         weights = None

@@ -51,7 +51,7 @@ index 5469a43..07abee8 100644
  
      def tl_loss(self, tl_pred, tl_gt):
 diff --git a/bevlane/train.py b/bevlane/train.py
-index 5426ce8..bc2b74d 100644
+index 5426ce8..c4afb54 100644
 --- a/bevlane/train.py
 +++ b/bevlane/train.py
 @@ -660,11 +660,22 @@ def _temporal_inputs(model, batch, device, tmp_idx):
@@ -127,7 +127,7 @@ index 5426ce8..bc2b74d 100644
                           "and ADEc; this adds supervision without "
                           "removing any.")
      ap.add_argument("--ego-w", type=float, default=0.0,
-@@ -1653,6 +1679,15 @@ def main():
+@@ -1653,6 +1679,29 @@ def main():
                      help="override the val scenes with a fixed list (for holdout evaluation)")
      ap.add_argument("--val-batch", type=int, default=0,
                      help="batch for the val loaders (default: max(train batch, 2)); evaluation is no-grad, so it should not shrink with the training batch -- at batch 1 the capped evals covered half the samples and the rare curve subset (ADEc) hit zero -> nan")
@@ -140,10 +140,24 @@ index 5426ce8..bc2b74d 100644
 +                         "frames x ~9 evaluators (batch size does not change "
 +                         "throughput -- the GPU is already saturated -- so "
 +                         "batch 1 is used and the peak is only ~3.5 GB).")
++    ap.add_argument("--val-workers", type=int, default=0,
++                    help="DataLoader workers for the VAL loaders (2026-09-23; default 0 = follow "
++                         "--workers). Val is with_depth=False with batch 1, so worker processes are "
++                         "safe here, and they matter: the training loader keeps --workers 0 to dodge "
++                         "the depth-tensor shared-memory issue, but the full-val pass is IO-bound "
++                         "(2967 frames x 24 images = ~71k cv2.imread calls per evaluator) and with 0 "
++                         "workers the GPU sat at 2-47%% utilisation while one process decoded. "
++                         "Measured on the 4090: epoch-end val went from ~75-80 min to a few minutes "
++                         "with --val-workers 4-8 (each of the ~9 evaluators also re-iterates the "
++                         "loader, so persistent_workers is enabled with it). "
++                         "IMPORTANT: >0 workers need a real /dev/shm -- run the container with "
++                         "--ipc=host (or --shm-size=8g). The default 64 MB /dev/shm dies with "
++                         "'DataLoader worker ... Bus error' (measured: 8 workers x prefetch 4 x "
++                         "24 images/sample needs ~1 GB).")
      ap.add_argument("--sync-bn", action="store_true",
                      help="SyncBatchNorm: needed when the batch per GPU drops to 1")
      ap.add_argument("--grad-ckpt", action="store_true",
-@@ -1768,6 +1803,14 @@ def main():
+@@ -1768,6 +1817,14 @@ def main():
                      help="soft-clDice weight for laneline connectivity")
      ap.add_argument("--seg-w", type=float, default=1.0)
      ap.add_argument("--init-ckpt", default="")
@@ -158,7 +172,7 @@ index 5426ce8..bc2b74d 100644
      ap.add_argument("--depth-bins", type=int, default=64,
                      help="number of depth head bins (Orin 48bin lever. Anything but 64 "
                           "drops the init's depth head and retrains it)")
-@@ -1826,6 +1869,8 @@ def main():
+@@ -1826,6 +1883,8 @@ def main():
      ap.add_argument("--gt-key", default="gt", choices=["gt", "gt_vec", "gt_cons"],
                      help="gt = raster autolabel; gt_vec = hybrid vector-line GT")
      args = ap.parse_args()
@@ -167,7 +181,7 @@ index 5426ce8..bc2b74d 100644
      if getattr(args, "det_head_only", False):
          args.det_only = True          # losses are dropped the same way as det-only
      if getattr(args, "det_only", False):
-@@ -1932,7 +1977,9 @@ def main():
+@@ -1932,7 +1991,9 @@ def main():
      # per epoch by EpochSubsetSampler so each epoch sees fresh frames.
      if True:   # all ranks: the distributed ADE probe shards the val set
          # val never needs depth GT (BEV mIoU eval only) -> with_depth=False
@@ -178,7 +192,7 @@ index 5426ce8..bc2b74d 100644
                              img_scale=args.img_scale,
                              dontcare_sidewalk=args.dontcare_sidewalk,
                              with_depth=False, with_seg2d=use_seg2d,
-@@ -1970,9 +2017,13 @@ def main():
+@@ -1970,9 +2031,23 @@ def main():
          # like a regression (0.318 -> 0.000) while a direct measurement on the
          # same weights showed it IMPROVING (IoU 0.101 -> 0.168). Scale the caps
          # so the sample count, and therefore comparability with r47, is fixed.
@@ -188,13 +202,23 @@ index 5426ce8..bc2b74d 100644
 +        # (va_ep is defined below; the lambda is evaluated only at val time.)
 +        vcap = (lambda n: len(va_ep) + 1) if args.val_full else \
 +            (lambda n: max(1, int(round(n * 2.0 / vb))))   # noqa: E731
++        # --val-workers (2026-09-23): the VAL loaders get their own worker count.
++        # The training loader keeps --workers (0 on this rig, to avoid the
++        # depth-tensor shared-memory collate failure), but val is
++        # with_depth=False + batch 1 and is pure IO: without workers the
++        # full-val pass decoded ~71k images in one process and left the GPU at
++        # 2-47 %. persistent_workers keeps the pool alive across the ~9
++        # evaluators that each re-iterate the same loader.
++        _vw = args.val_workers if args.val_workers > 0 else args.workers
++        _val_nw = (lambda cap: min(_vw, cap)) if _vw > 0 else (lambda cap: 0)   # noqa: E731
++        _vkw = dict(persistent_workers=True, prefetch_factor=4) if _vw > 0 else {}
          dv = DataLoader(va, batch_size=vb, shuffle=False,
 -                        num_workers=4 if is_main else 1, pin_memory=is_main)
-+                        num_workers=min(args.workers, 4 if is_main else 1), pin_memory=is_main)
++                        num_workers=_val_nw(4), pin_memory=is_main, **_vkw)
          # Epoch-end val used to read the FIRST `max_batches` batches of `dv`,
          # i.e. the head of the list: 10 of 270 scenes at val_batch 2, and only
          # 5 (with ZERO turn frames, hence ADEc=nan) at val_batch 1. Every
-@@ -1981,10 +2032,11 @@ def main():
+@@ -1981,10 +2056,11 @@ def main():
          # spans all 270 val scenes; deterministic, so epochs stay comparable.
          # dv itself is left alone: the in-epoch probe does its own striding and
          # shards across ranks.
@@ -204,20 +228,22 @@ index 5426ce8..bc2b74d 100644
          va_ep = torch.utils.data.Subset(va, list(range(0, len(va), _st)))
          dv_ep = DataLoader(va_ep, batch_size=vb, shuffle=False,
 -                           num_workers=4 if is_main else 1, pin_memory=is_main)
-+                           num_workers=min(args.workers, 4 if is_main else 1), pin_memory=is_main)
++                           num_workers=_val_nw(4), pin_memory=is_main, **_vkw)
          if is_main:
              _sc = {va.items[i][0] for i in va_ep.indices}
              print(f"[val] epoch-end slice: {len(va_ep)} samples over "
-@@ -2016,7 +2068,7 @@ def main():
+@@ -2016,8 +2092,8 @@ def main():
              if _hs_idx:
                  dv_hs = DataLoader(torch.utils.data.Subset(va, _hs_idx),
                                     batch_size=vb, shuffle=False,
 -                                   num_workers=2 if is_main else 1,
-+                                   num_workers=min(args.workers, 2 if is_main else 1),
-                                    pin_memory=is_main)
+-                                   pin_memory=is_main)
++                                   num_workers=_val_nw(2),
++                                   pin_memory=is_main, **_vkw)
              if is_main:
                  print(f"[val] high-speed slice: {len(_hs_idx)} frames "
-@@ -2025,7 +2077,8 @@ def main():
+                       f"(v0>=8 m/s) for wp0 bias", flush=True)
+@@ -2025,7 +2101,8 @@ def main():
          if use_lidar:
              # separate minimal loader (imgs,K,T,gt,depth4) so the main val
              # batch layout (indexed positionally everywhere) is untouched
@@ -227,16 +253,16 @@ index 5426ce8..bc2b74d 100644
                                      gt_key=args.gt_key, with_depth=True,
                                      img_scale=args.img_scale,
                                      with_lidarbev=use_lidarbev,
-@@ -2034,7 +2087,7 @@ def main():
+@@ -2034,7 +2111,7 @@ def main():
                                      n_cams=args.n_cams,
                                      use_gt_valid=args.gt_valid)
              dv_lid = DataLoader(va_lid, batch_size=vb, shuffle=False,
 -                                num_workers=2, pin_memory=True)
-+                                num_workers=min(args.workers, 2), pin_memory=True)
++                                num_workers=_val_nw(2), pin_memory=True, **_vkw)
  
      if args.limit_train and args.limit_train < len(tr):
          weights = None
-@@ -2854,7 +2907,74 @@ def main():
+@@ -2854,7 +2931,74 @@ def main():
      val2d_miou = None   # seg2d survival guard (2026-08-28)
      best_chain = 1e9    # EMA ckpt with the lowest chain proxy (ADEc + |high-speed wp0 bias|)
  
@@ -312,7 +338,7 @@ index 5426ce8..bc2b74d 100644
          if sampler:
              sampler.set_epoch(ep)
          for batch in dl:
-@@ -3939,9 +4059,7 @@ def main():
+@@ -3939,9 +4083,7 @@ def main():
                                    "saved", flush=True)
                  finally:
                      ema.swap_out(net, _bk)
@@ -323,7 +349,7 @@ index 5426ce8..bc2b74d 100644
              # composite best: BEV mIoU minus a small penalty for E2E curve
              # error, so "best" never selects a pre-curve-convergence epoch
              score = miou
-@@ -3976,6 +4094,16 @@ def main():
+@@ -3976,6 +4118,16 @@ def main():
              # never let the epoch-end evaluation kill the round
              print(f'[val ep{ep}] SKIPPED (OOM)', flush=True)
              torch.cuda.empty_cache()
