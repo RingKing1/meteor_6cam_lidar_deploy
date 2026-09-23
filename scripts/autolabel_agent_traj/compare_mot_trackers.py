@@ -18,7 +18,7 @@ import numpy as np
 
 THIS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, THIS)
-sys.path.insert(0, os.path.join(THIS, "..", "..", "tools", "SimpleTrack-main"))
+sys.path.insert(0, os.path.join(THIS, "..", "..", "tools", "SimpleTrack"))
 
 from build_agent_traj_gt import MOTTracker3D           # legacy engine
 from simpletrack_mot import SimpleTrackMOTEngine, build_config  # SimpleTrack

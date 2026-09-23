@@ -87,7 +87,7 @@ scripts/
 bash scripts/run_phase3_full_production.sh
 
 # 单场景(第 3 步示例,主机 venv)
-tools/SimpleTrack-main/venv_simpletrack/bin/python \
+tools/SimpleTrack/venv_simpletrack/bin/python \
   scripts/autolabel_agent_traj/build_agent_traj_simpletrack.py \
   --root scenes --scenes data_20260910_061820 --out-subdir agent_traj --force
 ```
@@ -123,10 +123,10 @@ python3 scripts/autolabel_bbox2d/compare_baseline_vs_consensus.py --scene data_2
 ### 4. 轨迹生成与 A/B 对比 (`autolabel_agent_traj/`)
 ```bash
 # 生产(SimpleTrack 引擎)
-tools/SimpleTrack-main/venv_simpletrack/bin/python \
+tools/SimpleTrack/venv_simpletrack/bin/python \
   scripts/autolabel_agent_traj/build_agent_traj_simpletrack.py --root scenes --scenes all --force
 # 对比旧自研引擎(轨迹持久性/碎片率/tvalid 覆盖)
-tools/SimpleTrack-main/venv_simpletrack/bin/python \
+tools/SimpleTrack/venv_simpletrack/bin/python \
   scripts/autolabel_agent_traj/compare_mot_trackers.py data_20260910_061820
 python3 scripts/autolabel_agent_traj/visualize_agent_traj.py --scene data_20260910_061820 --frames 100,300
 ```

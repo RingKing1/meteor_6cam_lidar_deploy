@@ -135,7 +135,7 @@ meteor_6cam_lidar_deploy/
 │   └── README.md                  # 改动清单与应用方法
 │
 ├── tools/                         # [部分 gitignore] 第三方库与工具工作区(2026-09-22 重组)
-│   ├── SimpleTrack-main/          # SimpleTrack (ICRA 2022) mot_3d 库,3D MOT 轨迹生成引擎
+│   ├── SimpleTrack/          # SimpleTrack (ICRA 2022) mot_3d 库,3D MOT 轨迹生成引擎
 │   │   └── venv_simpletrack/      # [gitignore] SimpleTrack 专用 py3.10 venv(运行环境)
 │   └── xcalib_calibration/        # XCalib 外参标定工作区(计划/脚本/配置入库,数据与 venv 忽略)
 │

@@ -99,10 +99,8 @@ tools/xcalib_calibration/index/frame_index.csv
 tools/xcalib_calibration/index/sample_diagnostic_detailed.json
 
 # ==============================================================================
-# SimpleTrack 3D MOT Integration (under tools/SimpleTrack-main/ since reorg)
-# The third-party mot_3d library and its local venv (tools/SimpleTrack-main/
-# venv_simpletrack) are regenerable; keep only our adapter scripts
-# (scripts/autolabel_agent_traj/*.py) versioned.
+# SimpleTrack 3D MOT integration (tools/SimpleTrack/).
+# The trimmed mot_3d core is versioned; only its local venv is regenerable.
 # ==============================================================================
-tools/SimpleTrack-main/
+tools/SimpleTrack/venv_simpletrack/
 **/agent_traj_st/

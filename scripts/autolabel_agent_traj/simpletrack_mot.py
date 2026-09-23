@@ -25,7 +25,7 @@ from scipy.optimize import linear_sum_assignment
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _SIMPLETRACK_ROOT = os.path.abspath(
-    os.path.join(_THIS_DIR, "..", "..", "tools", "SimpleTrack-main"))
+    os.path.join(_THIS_DIR, "..", "..", "tools", "SimpleTrack"))
 if _SIMPLETRACK_ROOT not in sys.path:
     sys.path.insert(0, _SIMPLETRACK_ROOT)
 

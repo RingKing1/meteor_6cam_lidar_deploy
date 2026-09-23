@@ -72,7 +72,7 @@ for SCENE in "${SCENES[@]}"; do
     # occlusion redundancy. Runs in the host venv (CPU-only, ~1-2 min/scene).
     # Legacy engine kept at scripts/autolabel_agent_traj/build_agent_traj_gt.py.
     echo "[3/4] Running 3D MOT & 3.0s Future Trajectory for ${SCENE} (SimpleTrack)..." | tee -a "${MASTER_LOG}"
-    "${DEPLOY_DIR}/tools/SimpleTrack-main/venv_simpletrack/bin/python" \
+    "${DEPLOY_DIR}/tools/SimpleTrack/venv_simpletrack/bin/python" \
       "${DEPLOY_DIR}/scripts/autolabel_agent_traj/build_agent_traj_simpletrack.py" \
         --root "${DEPLOY_DIR}/scenes" \
         --scenes "${SCENE}" \
