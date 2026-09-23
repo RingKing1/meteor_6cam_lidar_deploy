@@ -64,28 +64,48 @@ meteor_6cam_lidar_deploy/
 │   └── README.md                  # 快速使用备忘
 │
 ├── scripts/                       # 核心自动化生产、训练、诊断与可视化工具集（按流水线分类）
-│   ├── run_production_pipeline.py # 🌟 全自动一键多工序数据标注与预处理生产总控
-│   ├── README.md                  # 详细脚本分类说明与全流水线调用指南
+│   ├── README.md                  # 🌟 脚本索引:完整目录树/流水线指令/训练命令/状态标记
+│   ├── run_phase3_full_production.sh # 🌟 Phase-3 主线:6 场景四步全流程(推理→融合→追踪→导出)
+│   ├── run_production_pipeline.py # 全自动一键多工序数据标注与预处理生产总控
+│   ├── train_meteor_full_5ep.sh   # ⚠️ 历史 5-epoch 启动脚本(旧 5 头配置,勿直接复用)
 │   │
-│   ├── autolabel_3d_box/          # 🚗 【已实现】3D 目标检测边界框自动标注流水线
-│   │   ├── build_3d_box_gt.py     # 5 帧位姿补偿点云融合 + 6 相机多视反投影语义过滤
-│   │   ├── infer_focalformer_dataset.py # FocalFormer3D-LC 多模态全量推理与右手系转换
+│   ├── autolabel_ego_motion/      # 🧭 数据转换与自车运动/位姿解算
+│   │   ├── convert_custom.py      # 原始相机与点云时间戳对齐与 manifest 资产构建
+│   │   └── build_ego_motion.py    # WGS-84 转 ENU、位姿平滑与 3.0s 未来轨迹解算
+│   │
+│   ├── autolabel_3d_box/          # 🚗 3D 检测框(FocalFormer 路线)
+│   │   ├── infer_focalformer_dataset.py # FocalFormer3D-LC 全量推理 + 右手系转换 + 自车框过滤
+│   │   ├── prune_ego_boxes.py     # 自车误检二次清理
+│   │   ├── build_3d_box_gt.py     # (旧路线)5 帧点云融合 + 6 相机反投影语义过滤
 │   │   ├── compare_focalformer_centerpoint.py # FocalFormer3D 与 CenterPoint 对比评测
 │   │   └── bev_box_visualizer.py  # 6 路环视 3D 线框投影 + BEV 栅格高精渲染工具
 │   │
-│   ├── autolabel_traffic_light/   # 🚦 【已实现】红绿灯状态识别自动标注流水线
+│   ├── autolabel_bbox2d/          # 🎯 三模态共识融合(当前生产主线)
+│   │   ├── tri_modal_consensus_fusion.py # FocalFormer3D+YOLOv8x+Mask2Former 三模态投票
+│   │   └── compare_baseline_vs_consensus.py # 基线 0.25 vs 共识 0.15 对比
+│   │
+│   ├── autolabel_agent_traj/      # 🛤️ 3D MOT + 3.0s 未来轨迹(SimpleTrack)
+│   │   ├── simpletrack_mot.py     # SimpleTrack(ICRA 2022)接入模块
+│   │   ├── build_agent_traj_simpletrack.py # ✅ 当前引擎:格式兼容 + track_ids
+│   │   ├── build_agent_traj_gt.py # (旧引擎)自研 MOTTracker3D
+│   │   ├── compare_mot_trackers.py # A/B 对比(持久性/碎片率/tvalid/平滑度)
+│   │   └── visualize_agent_traj.py # 2D+3D 框 + 未来轨迹多模态可视化
+│   │
+│   ├── autolabel_instance_tracking/ # 🧩 2D 实例追踪与 TIER IV t4dataset 导出
+│   │   └── export_t4_instance.py  # 3D↔2D IoU 关联,实例 token = 真实 track id
+│   │
+│   ├── autolabel_traffic_light/   # 🚦 红绿灯状态识别自动标注流水线
 │   │   └── build_tl_gt.py         # 6 相机 ROI 提取、多目标时序追踪与 HSV 颜色投票
 │   │
-│   ├── autolabel_semantic_occ/    # 🌐 【待升级】语义分割与 3D 占据体素自动标注流水线
+│   ├── autolabel_semantic_occ/    # 🌐 语义分割与 3D 占据体素(Occupancy)自动标注
 │   │   ├── batch_2d_panoptic.py   # Mask2Former 2D 全景语义掩码批量推理
 │   │   ├── test_2d_panoptic.py    # 2D 全景分割模型性能与选型评测
-│   │   ├── build_bev_gt.py        # 点云时序累加 + 伪标签 BEV 车道地图生成
-│   │   ├── build_depth_and_occ.py # 稠密化几何深度与 3D 占据体素（Occupancy）构建
-│   │   └── diag_occ.py            # 3D 体素类间分布与空网格诊断分析
-│   │
-│   ├── autolabel_ego_motion/      # 🧭 自车运动与位姿解算流水线
-│   │   ├── convert_custom.py      # 原始相机与点云时间戳对齐与 manifest 资产构建
-│   │   └── build_ego_motion.py    # WGS-84 转 ENU、位姿平滑与 3.0s 未来轨迹解算
+│   │   ├── build_bev_gt.py        # 点云时序累加 + BEV 车道地图生成
+│   │   ├── build_depth_and_occ.py # 10 类语义 Occupancy + 度量深度(depth4)
+│   │   ├── promote_solid_crosswalk.py # 6 场景实心人行横道提升(17,845 帧)
+│   │   ├── generate_crosswalk_test_vis.py # 人行横道微调测试可视化
+│   │   ├── occ_visualizer.py      # 3D 线框 + 10 类 OCC 俯视可视化
+│   │   └── diag_occ.py            # OCC 路面体素 vs LiDAR 地面点诊断
 │   │
 │   └── training_eval/             # 🚀 模型微调训练与端到端规划评测
 │       ├── run_finetune.py        # 51.83M 模型微调启动器（单卡/多卡，支持任务损失权重）
