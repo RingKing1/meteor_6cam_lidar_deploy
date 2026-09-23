@@ -141,6 +141,11 @@ meteor_6cam_lidar_deploy/
 │   ├── probe_int8_lane.py         # 纯 PyTorch 假 INT8 代理(无需 TensorRT)
 │   └── README.md                  # 防坑结论:layer1 保 fp16 / lift 表 rig-specific / 校准纪律
 │
+├── patches/meteor_vla/            # [拓展归档] METEOR-VLA 大模型集成(部署侧,未启用)
+│   ├── vla_live.py / vla_server.py # VLA 运行时(BEVProjector+Qwen3-VL+LoRA)与 worker 进程
+│   ├── vla_overlay.patch          # orin_render/orin_realtime/export_onnx/runtime 的 VLA 改动
+│   └── README.md                  # 架构 / 前置条件(缺 VLA 训练产物)/ 三种启用方式
+│
 ├── tools/                         # [部分 gitignore] 第三方库与工具工作区(2026-09-22 重组)
 │   ├── SimpleTrack/          # SimpleTrack (ICRA 2022) mot_3d 库,3D MOT 轨迹生成引擎
 │   │   └── venv_simpletrack/      # [gitignore] SimpleTrack 专用 py3.10 venv(运行环境)

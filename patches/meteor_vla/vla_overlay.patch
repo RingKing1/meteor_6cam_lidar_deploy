@@ -1,0 +1,352 @@
+diff --git a/deploy/export_onnx.py b/deploy/export_onnx.py
+index c7e82ba..c79f604 100644
+--- a/deploy/export_onnx.py
++++ b/deploy/export_onnx.py
+@@ -122,7 +122,7 @@ class MeteorExport(torch.nn.Module):
+ 
+     def __init__(self, net, drop_lg=False, drop=(), uint8_in=False,
+                  argmax_out=False, lane_logits=False, no_hist=False,
+-                 depth_mean=False):
++                 depth_mean=False, bev_tokens=False):
+         super().__init__()
+         self.net = net
+         self.drop_lg = drop_lg
+@@ -160,6 +160,9 @@ class MeteorExport(torch.nn.Module):
+         self.argmax_out = argmax_out
+         self.lane_logits = lane_logits
+         self.depth_mean = depth_mean
++        # --bev-tokens (2026-09-10): the fused BEV pooled to 25x16 (96 x 400 fp16) as an extra
++        # tail output -- the interface the METEOR-VLA reads (same pooling as the VLA training dump)
++        self.bev_tokens = bev_tokens
+         # Dropping an output makes the subgraph that only feeds it dead code,
+         # which the exporter prunes -- the same mechanism --no-lanegraph uses,
+         # and the reason that one is worth 10 ms. This generalises it so the
+@@ -286,6 +289,8 @@ class MeteorExport(torch.nn.Module):
+             tail = tail + (_lane_logit,)
+         if _depth_mean is not None:
+             tail = tail + (_depth_mean,)          # tail (after lane_logit)
++        if self.bev_tokens:
++            tail = tail + (F.adaptive_avg_pool2d(net._fused_bev, (25, 16)).half(),)   # bev_tok [B,96,25,16]
+         return tuple(out) + tail
+ 
+ 
+@@ -537,6 +542,8 @@ def _out_names(args):
+         names.append("lane_logit")
+     if getattr(args, "depth_mean", False):
+         names.append("depth_mean")
++    if getattr(args, "bev_tokens", False):
++        names.append("bev_tok")
+     return names
+ 
+ 
+@@ -597,6 +604,8 @@ def main():
+                          "(indexing just becomes input splitting)")
+     ap.add_argument("--with-lidar", action="store_true",
+                     help="include the optional input lidar_bev [1,4,400,250] fp32 (no-hist only, 2026-09-08)")
++    ap.add_argument("--bev-tokens", action="store_true",
++                    help="append bev_tok [B,96,25,16] fp16 (fused BEV pooled to 25x16) -- the METEOR-VLA input (2026-09-10)")
+     ap.add_argument("--depth-mean", action="store_true",
+                     help="append the expected depth depth_mean [B,N,h,w] fp16 to the tail outputs (for unk2d, 2026-09-07)")
+     ap.add_argument("--no-hist", action="store_true",
+@@ -623,7 +632,8 @@ def main():
+                              argmax_out=args.argmax_out,
+                              lane_logits=args.lane_logits,
+                              depth_mean=args.depth_mean,
+-                             no_hist=args.no_hist)).eval()
++                             no_hist=args.no_hist,
++                             bev_tokens=args.bev_tokens)).eval()
+     # The network is camera-count agnostic (verified: a 7-camera forward runs
+     # and emits depth for 7), so dropping CAM_BACK_NARROW is purely an
+     # input-side change worth 1/8 of the backbone and the depth tower.
+diff --git a/deploy/orin_realtime.py b/deploy/orin_realtime.py
+index b3e8615..eec70d3 100644
+--- a/deploy/orin_realtime.py
++++ b/deploy/orin_realtime.py
+@@ -38,6 +38,30 @@ CAMS = R.CAMS
+ 
+ 
+ _LIDAR = os.environ.get("METEOR_LIDAR", "0") == "1"
++# METEOR_VLA_JSONL=<file>: overlay a VLA run (scene / hazards / rationale / command / waypoints per
++# (scene, frame)) on the demo canvas (2026-09-10). Records keyed by (scene name, frame index).
++_VLA = {}
++if os.environ.get("METEOR_VLA_JSONL"):
++    import json as _json
++    for _l in open(os.environ["METEOR_VLA_JSONL"]):
++        _r = _json.loads(_l)
++        _VLA[(_r["scene"], int(_r["frame"]))] = _r
++    print(f"[rt] VLA overlay: {len(_VLA)} records from {os.environ['METEOR_VLA_JSONL']}", flush=True)
++# METEOR_VLA_LIVE=<ckpt_last.pt>: run the METEOR-VLA in-process on the engine's bev_tok output (the 13th
++# head) every METEOR_VLA_EVERY frames (2026-09-10). One METEOR forward feeds both the E2E plan and the VLA.
++_VLA_LIVE = None
++if os.environ.get("METEOR_VLA_LIVE") or os.environ.get("METEOR_VLA_SERVER"):
++    from deploy.vla_live import derive_cmd as _vla_derive_cmd
++    if os.environ.get("METEOR_VLA_SERVER"):        # VLA worker(s) in their own process / environment
++        from deploy.vla_live import VLAClient, VLAPool
++        _addrs = [x for x in os.environ["METEOR_VLA_SERVER"].split(",") if x]
++        _VLA_LIVE = VLAClient(_addrs[0]) if len(_addrs) == 1 else VLAPool(_addrs)
++    else:
++        from deploy.vla_live import VLALive
++        _VLA_LIVE = VLALive(os.environ["METEOR_VLA_LIVE"])
++    _VLA_EVERY = int(os.environ.get("METEOR_VLA_EVERY", "10"))
++import json
++_VLA_DUMP = open(os.environ["METEOR_VLA_DUMP"], "a") if os.environ.get("METEOR_VLA_DUMP") else None
+ 
+ 
+ def loader(scenes, root, stride, q_raw, stop, loop, in_slots=None, in_free=None):
+@@ -72,8 +96,10 @@ def loader(scenes, root, stride, q_raw, stop, loop, in_slots=None, in_free=None)
+                     z = np.load(os.path.join(root, s, "ego_motion.npz"))
+                     v0s = z["v0"]
+                     poses = z["pose"] if "pose" in z else None
++                    wps_nav = z["wp"] if "wp" in z else None      # route -> navigation command for the VLA
+                 except Exception:
+-                    v0s = poses = None
++                    v0s = poses = wps_nav = None
++            _last_cmd = "keep_lane"
+             for f in m["frames"][::stride]:
+                 if stop.is_set():
+                     return
+@@ -93,6 +119,15 @@ def loader(scenes, root, stride, q_raw, stop, loop, in_slots=None, in_free=None)
+                     raw[c] = im
+                 if not ok:
+                     continue
++                if _VLA:      # METEOR_VLA_JSONL: attach the VLA record (this frame, else the previous one)
++                    raw["_vla"] = _VLA.get((s, int(f["frame"]))) or _VLA.get((s, int(f["frame"]) - 1))
++                if _VLA_LIVE is not None:
++                    raw["_scene"], raw["_frame"] = s, int(f["frame"])
++                    _fi = int(f["frame"])
++                    if wps_nav is not None and _fi < len(wps_nav) and np.abs(wps_nav[_fi]).sum() > 0:
++                        _last_cmd = _vla_derive_cmd(np.asarray(wps_nav[_fi], np.float32),
++                                                    float(v0s[_fi]) if v0s is not None and _fi < len(v0s) else 8.0)
++                    raw["_cmd"] = _last_cmd
+                 # stack here, off the producer's critical path (~8 ms)
+                 if in_slots is not None:
+                     # Zero-copy (2026-09-05): write CHW directly into a pinned slot.
+@@ -255,6 +290,8 @@ def main():
+     # producer puts un-numbered items; wrap with sequence numbers here
+     q_seq = queue.Queue(maxsize=4)
+ 
++    _vla_state = {"rec": None}
++
+     def sequencer():
+         i = 0
+         while True:
+@@ -262,6 +299,21 @@ def main():
+             if item2 is None:
+                 q_seq.put(None)
+                 return
++            if _VLA_LIVE is not None:
++                raw2, out2, v02 = item2[0], item2[4], item2[3]
++                if "bev_tok" in out2 and i % _VLA_EVERY == 0:
++                    if hasattr(_VLA_LIVE, "submit"):      # worker pool: run ahead, the renderer waits per frame
++                        raw2["_vla_future"] = _VLA_LIVE.submit(np.asarray(out2["bev_tok"])[0].copy(), float(v02),
++                                                               raw2.get("_cmd", "keep_lane"))
++                    else:
++                        _t = time.time()
++                        _vla_state["rec"] = _VLA_LIVE.infer(np.asarray(out2["bev_tok"])[0], float(v02),
++                                                            raw2.get("_cmd", "keep_lane"))
++                        if i % (_VLA_EVERY * 10) == 0:
++                            print(f"[vla] frame {i}: {time.time() - _t:.1f}s  cmd={raw2.get('_cmd')}  "
++                                  f"decision={(_vla_state['rec'].get('json') or {}).get('command')}", flush=True)
++                if "_vla_future" not in raw2:
++                    raw2["_vla"] = _vla_state["rec"]
+             q_seq.put((i,) + item2)
+             i += 1
+ 
+@@ -276,6 +328,13 @@ def main():
+                 done_q.put(None)
+                 return
+             seq, raw, K, Tc, v0, out, dt, pose, slot = item2
++            if "_vla_future" in raw:                     # pool result for this frame (ordered by construction)
++                raw["_vla"] = raw.pop("_vla_future").result()
++                _vla_state["rec"] = raw["_vla"]
++                if _VLA_DUMP is not None and raw["_vla"] is not None:   # METEOR_VLA_DUMP: keep the live records (re-render without re-inference)
++                    _VLA_DUMP.write(json.dumps({"scene": raw.get("_scene"), "frame": raw.get("_frame"), **raw["_vla"]}) + "\n"); _VLA_DUMP.flush()
++                if seq % 100 == 0:
++                    print(f"[vla] frame {seq}: decision={(raw['_vla'].get('json') or {}).get('command')}", flush=True)
+             t0 = time.time()
+             canvas = R.compose_frame(raw, K, Tc, v0, out, dt,
+                                      fps_now=(seq / max(time.time()
+@@ -338,6 +397,15 @@ def main():
+                                     _r.destroy()
+                                 except Exception:
+                                     a._scr = (2560, 1600)
++                            # GNOME ignores WND_PROP_FULLSCREEN from an unfocused
++                            # process (demo started over ssh): size and place the
++                            # window explicitly so it fills the display anyway.
++                            try:
++                                cv2.resizeWindow("METEOR Orin realtime",
++                                                 a._scr[0], a._scr[1])
++                                cv2.moveWindow("METEOR Orin realtime", 0, 0)
++                            except Exception:
++                                pass
+                     if a._scr is not None and                             (canvas.shape[1], canvas.shape[0]) != a._scr:
+                         canvas = cv2.resize(canvas, a._scr,
+                                             interpolation=cv2.INTER_LINEAR)
+diff --git a/deploy/orin_render.py b/deploy/orin_render.py
+index 5616e79..78488e0 100644
+--- a/deploy/orin_render.py
++++ b/deploy/orin_render.py
+@@ -400,6 +400,107 @@ def _sp_gpu_name():
+                             timeout=5).decode().splitlines()[0].strip()
+     return _gpu.replace("NVIDIA ", "").replace("GeForce ", "").replace("Jetson ", "")
+ 
++VLA_COL = (255, 90, 255)     # BGR magenta: the VLA trajectory (E2E stays green)
++
++
++def _draw_vla_path_cam(img, rec, Kc, Tce, cw, ch, W0=768, H0=432):
++    """Project the VLA waypoints (x fwd, y left, ground) into the front tile as a magenta polyline."""
++    wps = rec.get("wp_reg")
++    if not wps:
++        return
++    pts = np.concatenate([[[0.0, 0.0]], np.asarray(wps, np.float32)], 0)
++    P = np.stack([pts[:, 0], pts[:, 1], np.zeros(len(pts))], 1)
++    C = (Tce[:3, :3] @ P.T + Tce[:3, 3:]).T
++    uv = (Kc @ C.T).T
++    prev = None
++    for (u, v, z) in uv:
++        if z <= 0.5:
++            prev = None
++            continue
++        q = (int(u / z * cw / W0), int(v / z * ch / H0))
++        if prev is not None:
++            cv2.line(img, prev, q, VLA_COL, 2, cv2.LINE_AA)
++        cv2.circle(img, q, 3, VLA_COL, -1, cv2.LINE_AA)
++        prev = q
++
++
++def _wrap(txt, n):
++    out, cur = [], ""
++    for w in str(txt).split():
++        if len(cur) + len(w) + 1 > n:
++            out.append(cur); cur = w
++        else:
++            cur = (cur + " " + w).strip()
++    if cur:
++        out.append(cur)
++    return out
++
++
++# Weather / lighting words are not observable from the BEV tokens the VLA reads (2026-09-10, user
++# instruction "hide what has no grounding"): drop clauses / items / sentences that contain them.
++_VLA_UNGROUNDED = ("clear weather", "clear sky", "clear skies", "clear day", "clear, sunny", "clear and sunny", "under clear",
++                   "overcast", "cloud", "rain", "snow", "fog", "daylight", "daytime", "lighting", "bright", "dim ",
++                   "night", "dusk", "evening", "sunny", "sunlight", "weather", "sky", "skies", "visibility", "wet ", "dry ",
++                   "glare", "dark", "illuminat", "japan", "country",   # country is not observable either
++                   "twilight", "dawn", "sunset", "sunrise", "morning", "afternoon", "noon", "midday", "shade", "shadow")
++
++
++def _has_ungrounded(t):
++    t = " " + str(t).lower() + " "
++    return any(k in t for k in _VLA_UNGROUNDED)
++
++
++def _filter_scene(t):
++    import re
++    parts = re.split(r",| under | during | with | in | at | on a | on an ", " " + str(t))
++    keep = [p.strip() for p in parts if p.strip() and not _has_ungrounded(p)
++            and not re.fullmatch(r"(a |an )?(clear|sunny|dry|wet)", p.strip().lower())]
++    out = ", ".join(keep).strip(" ,.")
++    return (out[0].upper() + out[1:] + ".") if out else "(road-type / traffic description withheld)"
++
++
++def _filter_rationale(t):
++    import re
++    sents = [x.strip() for x in re.split(r"(?<=[.;])\s+", str(t)) if x.strip()]
++    keep = [x for x in sents if not _has_ungrounded(x)]
++    return " ".join(keep) if keep else "(withheld: rationale relied on weather / lighting)"
++
++
++def _draw_vla_strip(canvas, rec):
++    """Reasoning strip in the free band under the depth rows (left of the BEV panel)."""
++    js = rec.get("json") or {}
++    y0 = 34 + 4 * (CH + 26) + 4                 # 952: first free row under the depth block
++    x_end = 8 + 4 * (CW + 6) - 6                # 1526: left edge of the BEV panel
++    cv2.rectangle(canvas, (8, y0), (x_end, VH - 6), (30, 26, 34), -1)
++    cv2.putText(canvas, "METEOR-VLA (Qwen3-VL-8B + LoRA on METEOR BEV tokens)", (14, y0 + 17),
++                cv2.FONT_HERSHEY_SIMPLEX, 0.48, VLA_COL, 1, cv2.LINE_AA)
++    cv2.putText(canvas, "path: green = METEOR   pink = METEOR-VLA", (1100, y0 + 17),
++                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
++    _ci = str(rec.get("cmd_in", "?"))
++    if _ci in ("turn_left", "turn_right") and float(rec.get("v0", 0.0)) >= 7.0:
++        _ci = _ci.replace("turn", "curve")
++    cv2.putText(canvas, f"nav command in: {_ci}", (520, y0 + 17),
++                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1, cv2.LINE_AA)
++    cmd = str(js.get("command", "?"))
++    # The command vocabulary the VLA was trained with means "lateral displacement > 2 m within 3 s":
++    # at speed that is a road curve, not an intersection turn. Show it as such (2026-09-10 user report).
++    if cmd in ("turn_left", "turn_right") and float(rec.get("v0", 0.0)) >= 7.0:
++        cmd = cmd.replace("turn", "curve")
++    col = {"stop": (80, 80, 255), "turn_left": (80, 200, 255), "turn_right": (80, 200, 255),
++           "curve_left": (200, 220, 120), "curve_right": (200, 220, 120)}.get(cmd, (120, 220, 120))
++    lab = f"decision: {cmd}"
++    cv2.rectangle(canvas, (800, y0 + 3), (800 + 16 + int(9.6 * len(lab)), y0 + 23), col, -1)
++    cv2.putText(canvas, lab, (808, y0 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 1, cv2.LINE_AA)
++    hz = [h for h in js.get("hazards", []) if not _has_ungrounded(h)][:5]
++    cols = (("Scene (weather / lighting / country withheld: not in BEV)", _filter_scene(js.get("scene", "")), 14, 62),
++            ("Hazards", "; ".join(hz) or "none flagged", 470, 55),
++            ("Rationale", _filter_rationale(js.get("rationale", "")), 880, 82))
++    for title, txt, x, nchar in cols:
++        cv2.putText(canvas, title, (x, y0 + 38), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 200, 255), 1, cv2.LINE_AA)
++        for li, ln in enumerate(_wrap(txt, nchar)[:3]):
++            cv2.putText(canvas, ln, (x, y0 + 54 + 15 * li), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (230, 230, 230), 1, cv2.LINE_AA)
++
++
+ def compose_frame(raw, K, Tc, v0, out, dt, fps_now=None, pose=None):
+     """One 1920x1080 canvas from one frame's raw images + engine outputs.
+ 
+@@ -511,6 +612,10 @@ def compose_frame(raw, K, Tc, v0, out, dt, fps_now=None, pose=None):
+         draw_boxes2d(img, b2d[i], CW, CH)
+         if chn == "CAM_FRONT_WIDE":
+             draw_path_ribbon(img, sel, K[0][i], Tc[0][i], CW, CH)
++            if raw.get("_vla"):
++                _draw_vla_path_cam(img, raw["_vla"], K[0][i], Tc[0][i], CW, CH)
++                cv2.putText(img, "path: METEOR", (6, CH - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (60, 255, 120), 2, cv2.LINE_AA)
++                cv2.putText(img, "path: METEOR-VLA", (6, CH - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, VLA_COL, 2, cv2.LINE_AA)
+         cv2.putText(canvas, chn, (x0, y0 - 6),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                     (200, 200, 200), 1, cv2.LINE_AA)
+@@ -705,6 +810,13 @@ def compose_frame(raw, K, Tc, v0, out, dt, fps_now=None, pose=None):
+                   (0, 255, 0), 2)
+     for q in pts[1:]:
+         cv2.circle(bev, q, 3, (0, 255, 0), -1)
++    if raw.get("_vla") and raw["_vla"].get("wp_reg"):      # VLA waypoints in magenta, same mapping
++        cv2.putText(bev, "METEOR", (BW2 - 150, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
++        cv2.putText(bev, "METEOR-VLA", (BW2 - 150, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.5, VLA_COL, 1, cv2.LINE_AA)
++        vp = [(int(YH * sx2), cy0)] + [(int((YH - y) * sx2), int((VIEW_F - x) * sy2)) for x, y in raw["_vla"]["wp_reg"]]
++        cv2.polylines(bev, [np.array(vp, np.int32).reshape(-1, 1, 2)], False, VLA_COL, 2)
++        for q in vp[1:]:
++            cv2.circle(bev, q, 3, VLA_COL, -1)
+     st_deg = float(np.degrees(sel[12]))
+     acc = float(sel[13])
+     brk = 1 / (1 + np.exp(-float(sel[14])))
+@@ -777,6 +889,8 @@ def compose_frame(raw, K, Tc, v0, out, dt, fps_now=None, pose=None):
+             _ENV_TAG = f"{_gpu} - TensorRT {_trt.__version__}"
+         except Exception:
+             _ENV_TAG = _gpu
++    if raw.get("_vla"):
++        _draw_vla_strip(canvas, raw["_vla"])
+     _t = (f"METEOR - {_ENV_TAG} - on-device "
+           f"inference+render - {dt:.0f} ms infer"
+           + (" - LiDAR ON" if out.get("lidar_bev_in") is not None else ""))
+diff --git a/deploy/runtime.py b/deploy/runtime.py
+index 30e5a4c..76cf4df 100644
+--- a/deploy/runtime.py
++++ b/deploy/runtime.py
+@@ -104,7 +104,7 @@ OUTPUTS = ["lane", "depth", "seg2d", "hm", "reg",
+            "hm2d_s0", "hm2d_s1", "hm2d_s2",
+            "reg2d_s0", "reg2d_s1", "reg2d_s2",
+            "ego", "occ", "traj", "stationary", "tl", "risk", "flow",
+-           "lg_pts", "lg_meta", "lg_adj", "unk", "lane_logit", "depth_mean", "raw_bev"]
++           "lg_pts", "lg_meta", "lg_adj", "unk", "lane_logit", "depth_mean", "raw_bev", "bev_tok"]
+ HIST_OFFS = (2, 6, 14)          # slots at t-0.4 / -1.2 / -2.8 s (5 Hz frames)
+ MEAN = np.array([0.485, 0.456, 0.406], np.float32)
+ STD = np.array([0.229, 0.224, 0.225], np.float32)
+diff --git a/docs/QUICKSTART.md b/docs/QUICKSTART.md
+index 9842431..da2d530 100644
+--- a/docs/QUICKSTART.md
++++ b/docs/QUICKSTART.md
+@@ -72,3 +72,4 @@ is complete. To try a single scene, point `--root` at it directly, e.g. `--root
+ | `METEOR_CUDAGRAPH` | 0 | run the engine through a CUDA Graph (used on Orin) |
+ | `METEOR_LIDAR` | 0 | feed `lidar_bev/` to a LiDAR-input engine |
+ | `METEOR_GPU_NAME` | (auto) | device name shown in the title bar |
++| `METEOR_VLA_JSONL` | (none) | overlay a per-frame JSONL of an external reasoner (trajectory `wp_reg`, `json.scene/hazards/rationale/command`) as a second path and a text strip (experimental) |
