@@ -132,7 +132,14 @@ meteor_6cam_lidar_deploy/
 ├── patches/meteor_train/          # METEOR 训练脚本本地修改快照(上游仓库无推送权限)
 │   ├── meteor_changes_20260923.patch # 全部改动 diff(no_grad/resume/存档/val-full + 6 相机适配)
 │   ├── train.py / dataset.py / model.py / orin_render.py # 4 个源文件副本
+│   ├── PR3_vla_overlay_review.md  # 上游 PR #3(VLA overlay + INT8 调查)评估笔记
 │   └── README.md                  # 改动清单与应用方法
+│
+├── patches/meteor_deploy/         # 部署工具(6 相机适配)+ INT8 量化防坑手册
+│   ├── int8_lane_local.py         # TRT 8.6:fp16/INT8/INT8+sparse 构建 + 逐类车道像素探针
+│   ├── int8_lane_x86.py           # TRT 10(cuda-python)版
+│   ├── probe_int8_lane.py         # 纯 PyTorch 假 INT8 代理(无需 TensorRT)
+│   └── README.md                  # 防坑结论:layer1 保 fp16 / lift 表 rig-specific / 校准纪律
 │
 ├── tools/                         # [部分 gitignore] 第三方库与工具工作区(2026-09-22 重组)
 │   ├── SimpleTrack/          # SimpleTrack (ICRA 2022) mot_3d 库,3D MOT 轨迹生成引擎

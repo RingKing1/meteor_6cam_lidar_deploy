@@ -114,6 +114,13 @@ python3 /work/METEOR/bevlane/train.py \
 - 数据:`agent_traj` 由 SimpleTrack(ICRA 2022)生成,见 `doc/simpletrack_ab_report.md`
 - 诊断基准脚本见本仓库 `tests/`(val 显存 / OOM 复现 / 全量 val 吞吐)
 
+## 同目录 / 相关文档
+
+- **`PR3_vla_overlay_review.md`** —— METEOR 上游 PR #3(`vla-overlay-int8-probes`)的评估笔记:
+  VLA overlay 集成 + INT8 车道细化调查,含逐文件改动清单与"对我们部署的价值"判断
+- **`../meteor_deploy/`** —— 从该 PR 摘取并**适配 6 相机**的部署工具(`int8_lane_local.py` /
+  `int8_lane_x86.py` / `probe_int8_lane.py`)+ INT8 量化防坑手册
+
 ## 注意
 
 METEOR 工作区中的 `data/`(655 MB 数据集)、`models/`(536 MB 权重与查表)、
