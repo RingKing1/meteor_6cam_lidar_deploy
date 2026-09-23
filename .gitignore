@@ -88,10 +88,13 @@ tools/xcalib_calibration/overlays/
 tools/xcalib_calibration/converted/
 tools/xcalib_calibration/detections/
 tools/xcalib_calibration/baseline/
+tools/xcalib_calibration/baseline_correct/
 tools/xcalib_calibration/matches/
 tools/xcalib_calibration/candidates/
 tools/xcalib_calibration/validation/
 tools/xcalib_calibration/refined/
+tools/xcalib_calibration/refined_single_dof/
+tools/xcalib_calibration/refined_small/
 tools/xcalib_calibration/index/frame_index.csv
 tools/xcalib_calibration/index/sample_diagnostic_detailed.json
 

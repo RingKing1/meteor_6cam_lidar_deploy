@@ -5,8 +5,8 @@
   "scene_image_width": 768,
   "scene_image_height": 432,
   "scene_image_scale": 0.4,
-  "raw_data_dir": "../raw_data",
-  "scenes_dir": "../scenes",
+  "raw_data_dir": "../../raw_data",
+  "scenes_dir": "../../scenes",
   "baseline_scene": "data_20260910_061820",
   "scenes": [
     "data_20260910_061820",

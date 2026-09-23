@@ -17,7 +17,7 @@ from _calibration_utils import (
     transform_points,
     uniform_sample,
 )
-from common_paths import CALIBRATION_DIR, load_config
+from common_paths import CALIBRATION_DIR, DEPLOY_DIR, load_config
 
 
 BOX_EDGES = (
@@ -30,6 +30,42 @@ BOX_EDGES = (
 def read_scaled_calibrations() -> dict:
     path = CALIBRATION_DIR / "converted" / "scaled_calibrations.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_ego_to_lidar(scene_name: str) -> np.ndarray:
+    """bev_box/boxes_3d are clustered in the ego/IMU frame because
+    build_3d_box_gt.py applies T_lidar_ego (lidar2imu_calib.txt) before
+    clustering. Return its inverse so boxes can be mapped back to lidar.
+    """
+    path = DEPLOY_DIR / "raw_data" / scene_name / "calib" / "lidar" / "lidar2imu_calib.txt"
+    rows: list[list[float]] = []
+    in_matrix = False
+    for raw_line in path.read_text().splitlines():
+        if "4x4" in raw_line:
+            in_matrix = True
+            continue
+        if in_matrix:
+            values = raw_line.split()
+            if len(values) == 4:
+                rows.append([float(value) for value in values])
+            if len(rows) == 4:
+                break
+    if len(rows) != 4:
+        raise ValueError(f"cannot parse lidar2imu matrix from {path}")
+    lidar_to_ego = np.asarray(rows, dtype=np.float64)
+    return np.linalg.inv(lidar_to_ego)
+
+
+def boxes_ego_to_lidar(boxes_3d: np.ndarray, ego_to_lidar: np.ndarray) -> np.ndarray:
+    """Rigidly transform center (cx,cy,zc), re-express yaw; cls/l/w/h unchanged."""
+    converted = boxes_3d.copy()
+    centers = boxes_3d[:, 1:4].astype(np.float64)
+    centers_lidar = transform_points(centers, ego_to_lidar)
+    rotation_ego_to_lidar = ego_to_lidar[:3, :3]
+    yaw_delta = float(np.arctan2(rotation_ego_to_lidar[1, 0], rotation_ego_to_lidar[0, 0]))
+    converted[:, 1:4] = centers_lidar
+    converted[:, 7] = boxes_3d[:, 7] + yaw_delta
+    return converted
 
 
 def xyxy_box(box: np.ndarray) -> np.ndarray:
@@ -250,6 +286,7 @@ def main() -> int:
     max_assignment_distance = float(baseline_config["max_assignment_distance_px"])
     min_depth = float(baseline_config["minimum_camera_depth_m"])
 
+    ego_to_lidar = load_ego_to_lidar(scene_name)
     total_frames = len(list((scene_dir / "bev_box").glob("*.npz")))
     selected_frames = uniform_sample(frame_count, total_frames)
     records = []
@@ -259,6 +296,7 @@ def main() -> int:
         boxes_3d, detections_by_camera = load_camera_data(
             scene_dir, frame_index, camera_names
         )
+        boxes_3d = boxes_ego_to_lidar(boxes_3d, ego_to_lidar)
         frame_cache = {}
 
         for camera_name in camera_names:
@@ -336,7 +374,7 @@ def main() -> int:
         writer.writerow(["scene", "frame"])
         writer.writerows([[scene_name, frame] for frame in selected_frames])
 
-    records_path = baseline_dir / "baseline_projection_pairs.csv"
+    records_path = baseline_dir / "baseline_pairs.csv"
     fields = list(records[0].keys()) if records else []
     with records_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -375,6 +413,7 @@ def main() -> int:
             int(config["scene_image_height"]),
         ],
         "direct_transform": "T_lidar_camera",
+        "chain_correction": "boxes_3d stored in ego/IMU frame; mapped ego->lidar via inverse lidar2imu_calib before projection",
         "max_assignment_distance_px": max_assignment_distance,
         "overall": summarize_errors(records),
         "by_camera": by_camera,
