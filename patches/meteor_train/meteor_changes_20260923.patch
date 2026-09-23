@@ -1,3 +1,55 @@
+diff --git a/bevlane/dataset.py b/bevlane/dataset.py
+index 0b3d142..db99ab4 100644
+--- a/bevlane/dataset.py
++++ b/bevlane/dataset.py
+@@ -343,6 +343,9 @@ class BevLaneDataset(Dataset):
+         if self.with_seg2d:
+             try:
+                 sg = np.load(os.path.join(self.root, s, f[self.seg2d_key]))["seg"]
++                if sg.shape[0] < len(CAMS):
++                    pad = np.full((len(CAMS) - sg.shape[0],) + sg.shape[1:], 255, dtype=sg.dtype)
++                    sg = np.concatenate([sg, pad], 0)
+             except Exception:
+                 sg = np.full((len(CAMS), 108, 192), 255, np.uint8)
+             if gone:
+@@ -360,12 +363,17 @@ class BevLaneDataset(Dataset):
+             try:
+                 bp = np.load(os.path.join(self.root, s,
+                                           f["bev_box_p"]))["boxes"]
++                if bp is None or bp.size == 0:
++                    bp = np.zeros((0, 6), np.float32)
++                else:
++                    bp = bp.reshape(-1, 6).astype(np.float32)
+             except Exception:
+                 bp = np.zeros((0, 6), np.float32)
+             KMAX = 64
+             pad = np.zeros((KMAX, 6), np.float32)
+             nb = min(len(bp), KMAX)
+-            pad[:nb] = bp[:nb]
++            if nb > 0:
++                pad[:nb] = bp[:nb]
+             out.append(torch.from_numpy(pad))
+             # -1 = "this scene has NO box annotation", so the detector losses
+             # can skip it instead of learning "no objects in this domain".
+diff --git a/bevlane/model.py b/bevlane/model.py
+index 5469a43..07abee8 100644
+--- a/bevlane/model.py
++++ b/bevlane/model.py
+@@ -2785,7 +2785,13 @@ class DepthSegIPMNetV27(DepthSegIPMNetV26):
+         out = super().forward(imgs, K, T_cam_ego, v0, prev_bev, warp_theta)
+         B, N = imgs.shape[:2]
+         f = self._f_s4.view(B, N, -1, *self._f_s4.shape[-2:])
+-        ff = torch.cat([f[:, 0], f[:, 6]], 1)   # FRONT_WIDE + FRONT_NARROW
++        if N >= 7:
++            ff = torch.cat([f[:, 0], f[:, 6]], 1)   # FRONT_WIDE + FRONT_NARROW
++        else:
++            # 6-camera rigs have no FRONT_NARROW slot: the TLR head has no
++            # valid input. Emit zero logits; deployments drop this output, and
++            # the subgraph is then pruned from the exported graph.
++            ff = torch.cat([f[:, 0], torch.zeros_like(f[:, 0])], 1)
+         return out + (self.tl_fc(self.tl_head(ff).flatten(1)),)
+ 
+     def tl_loss(self, tl_pred, tl_gt):
 diff --git a/bevlane/train.py b/bevlane/train.py
 index 5426ce8..bc2b74d 100644
 --- a/bevlane/train.py
@@ -288,3 +340,163 @@ index 5426ce8..bc2b74d 100644
          if ddp:
              dist.barrier()
      if is_main:
+diff --git a/deploy/orin_render.py b/deploy/orin_render.py
+index 5616e79..a687d4f 100644
+--- a/deploy/orin_render.py
++++ b/deploy/orin_render.py
+@@ -268,6 +268,84 @@ def thin_lane_lines_np(pred, classes=(4,)):
+ _OCC_CACHE = {}
+ 
+ 
++def draw_occ_topview(occ, lidar_bev=None, size=360, rng_m=24.0, margin_th=0.3):
++    """North-up (front-up) 2-D top view of the OCC prediction, ego centred.
++
++    occ is [C,Z,H,W] logits with the ego-frame convention
++    row=(40-x)/0.4, col=(40-y)/0.4. The height axis is collapsed per cell by
++    the best occupied class vs free. Optional LiDAR ground points (raster
++    ch3 occupied, ch1 max-z low) are drawn as pale dots for a direct
++    camera-vs-LiDAR alignment check. Returns a size x size BGR image.
++    """
++    # BGR semantic colours tuned for a small dark panel: road bright green,
++    # dynamic objects warm/bright, vegetation/buildings dimmed.
++    # index: 0 free,1 obstacle,2 vehicle,3 2wheel,4 ped,5 road,
++    #        6 sidewalk,7 vegetation,8 building,9 pole/sign
++    top_pal = np.array([
++        [0, 0, 0],        # free
++        [150, 150, 150],  # obstacle
++        [220, 90, 0],     # vehicle (blue)
++        [0, 170, 255],    # 2wheel (orange)
++        [0, 0, 255],      # pedestrian (red)
++        [70, 200, 90],    # road (green)
++        [50, 110, 70],    # sidewalk
++        [36, 84, 36],     # vegetation
++        [64, 64, 64],    # building
++        [0, 220, 220],   # pole/sign (yellow)
++    ], np.uint8)
++    img = np.full((size, size, 3), 18, np.uint8)
++    n = int(rng_m / 0.4)                    # cells per half-side
++    s = size / (2 * n)                      # px per cell
++    for g in range(-n, n + 1, 25):         # 10 m grid
++        p = int((g + n) * s)
++        cv2.line(img, (p, 0), (p, size), (42, 42, 42), 1)
++        cv2.line(img, (0, p), (size, p), (42, 42, 42), 1)
++    o = np.asarray(occ, np.float32)
++    if o.ndim == 5:
++        o = o[0]
++    c0 = o.shape[-1] // 2 - n
++    oc = o[:, :10, c0:c0 + 2 * n, c0:c0 + 2 * n]      # [C,<=10,2n,2n]
++    free = oc[0]                                        # [Z,h,w]
++    # A cell keeps a class if that class beats free at ANY height bin (road
++    # sits at the ground bin and loses to a single-argmax over tall clutter
++    # then pick colour by display priority: dynamic > drivable > static.
++    PRIORITY = [4, 3, 2, 5, 6, 9, 1, 7, 8]             # occ class ids
++    hit = np.zeros((2 * n, 2 * n), np.uint8)
++    for cl in PRIORITY:
++        mz = (oc[cl] - free).max(0) > margin_th
++        hit = np.where(mz & (hit == 0), cl, hit)
++    cls = hit
++    keep = hit > 0
++    layer = top_pal[np.clip(cls, 0, len(top_pal) - 1)]
++    layer = cv2.resize(layer, (size, size), interpolation=cv2.INTER_NEAREST)
++    mk = cv2.resize(keep.astype(np.uint8), (size, size),
++                    interpolation=cv2.INTER_NEAREST).astype(bool)
++    img[mk] = layer[mk]
++    if lidar_bev is not None:
++        _lmode = os.environ.get("METEOR_OCC_TOP_LIDAR", "obstacle")
++        l = np.asarray(lidar_bev, np.float32)
++        if l.ndim == 4:
++            l = l[0]
++        r0, r1 = int((80 - rng_m) / 0.4), int((80 + rng_m) / 0.4)
++        cc0, cc1 = int((50 - rng_m) / 0.4), int((50 + rng_m) / 0.4)
++        if _lmode == "ground":
++            sel = (l[3] > 0) & (l[1] < 0.3)
++            lcol = np.array([110, 200, 170], np.float32)
++        else:                               # default: sparse obstacle returns
++            sel = (l[3] > 0) & (l[1] > 0.3)
++            lcol = np.array([90, 220, 255], np.float32)   # warm yellow dots
++        g = sel[r0:r1, cc0:cc1]
++        g = cv2.resize(g.astype(np.uint8), (size, size),
++                       interpolation=cv2.INTER_NEAREST).astype(bool)
++        img[g] = (0.45 * img[g] + 0.55 * lcol).astype(np.uint8)
++    c = size // 2
++    cv2.arrowedLine(img, (c, c), (c, c - int(2.2 * s * 10)),
++                    (0, 0, 255), 2, tipLength=0.25)
++    cv2.drawMarker(img, (c, c), (0, 255, 255),
++                   cv2.MARKER_TRIANGLE_UP, 14, 2)
++    return img
++
++
+ def draw_occ(bev, occ, sy2, sx2, alpha=0.35, thresh=0.0):
+     """Overlay the occupancy grid (occ) on the BEV panel.
+ 
+@@ -732,32 +810,45 @@ def compose_frame(raw, K, Tc, v0, out, dt, fps_now=None, pose=None):
+         _occ = out.get("occ")
+         if _occ is not None:
+             try:
+-                from deploy.occ_iso import cube_render_fast
+-                # Drawn naively on the ARM CPU this takes ~270 ms and halves the FPS.
+-                # (1) crop to +-24 m before argmax (6.4M -> 2.3M elements),
+-                # (2) draw directly at final size, (3) update only every other frame.
+-                _ev = max(1, int(os.environ.get("METEOR_OCC_EVERY", "3")))
+-                _OCC_CACHE["n"] = _OCC_CACHE.get("n", -1) + 1
+-                if _OCC_CACHE["n"] % _ev == 0 or _OCC_CACHE.get("iso") is None:
+-                    o = np.asarray(_occ)
+-                    if o.ndim == 5:
+-                        o = o[0]
+-                    n24 = 60                       # 24 m / 0.4 m
+-                    c0 = o.shape[-1] // 2 - n24
+-                    # also drop z to the drawing ceiling (3 m -> 10 bins) first: argmax
+-                    # element count 1.92M -> 1.2M
+-                    oc = o[:, :10, c0:c0 + 2 * n24, c0:c0 + 2 * n24]
+-                    occ_cls = oc.argmax(0).astype(np.uint8)   # [Z,h,w]
+-                    _ds = int(os.environ.get("METEOR_OCC_DS", "1"))
+-                    if _ds > 1:        # voxel subsampling (coarse, but 1/ds^2 cheaper)
+-                        occ_cls = occ_cls[:, ::_ds, ::_ds]
+-                    _OCC_CACHE["iso"] = cube_render_fast(occ_cls, W=426, H=360)
+-                iso = _OCC_CACHE["iso"]
+                 oy0 = VH - 368
+-                canvas[oy0:oy0 + 360, 8:8 + 426] = iso
+-                cv2.putText(canvas, "pred OCC voxel grid +-24m (bldg hidden)",
+-                            (8, oy0 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+-                            (220, 220, 220), 1, cv2.LINE_AA)
++                if os.environ.get("METEOR_OCC_VIEW", "iso") == "top":
++                    # North-up 2-D top view: front points up, ego centred.
++                    # Refresh every METEOR_OCC_EVERY frames to bound render cost.
++                    _ev = max(1, int(os.environ.get("METEOR_OCC_EVERY", "1")))
++                    _OCC_CACHE["n"] = _OCC_CACHE.get("n", -1) + 1
++                    if _OCC_CACHE["n"] % _ev == 0 or _OCC_CACHE.get("top") is None:
++                        _OCC_CACHE["top"] = draw_occ_topview(
++                            _occ, out.get("lidar_bev_in"), size=360)
++                    canvas[oy0:oy0 + 360, 8:8 + 360] = _OCC_CACHE["top"]
++                    cv2.putText(canvas, "pred OCC top view +-24m (front up)",
++                                (8, oy0 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
++                                (220, 220, 220), 1, cv2.LINE_AA)
++                else:
++                    from deploy.occ_iso import cube_render_fast
++                    # Drawn naively on the ARM CPU this takes ~270 ms and halves the FPS.
++                    # (1) crop to +-24 m before argmax (6.4M -> 2.3M elements),
++                    # (2) draw directly at final size, (3) update only every other frame.
++                    _ev = max(1, int(os.environ.get("METEOR_OCC_EVERY", "3")))
++                    _OCC_CACHE["n2"] = _OCC_CACHE.get("n2", -1) + 1
++                    if _OCC_CACHE["n2"] % _ev == 0 or _OCC_CACHE.get("iso") is None:
++                        o = np.asarray(_occ)
++                        if o.ndim == 5:
++                            o = o[0]
++                        n24 = 60                       # 24 m / 0.4 m
++                        c0 = o.shape[-1] // 2 - n24
++                        # also drop z to the drawing ceiling (3 m -> 10 bins) first: argmax
++                        # element count 1.92M -> 1.2M
++                        oc = o[:, :10, c0:c0 + 2 * n24, c0:c0 + 2 * n24]
++                        occ_cls = oc.argmax(0).astype(np.uint8)   # [Z,h,w]
++                        _ds = int(os.environ.get("METEOR_OCC_DS", "1"))
++                        if _ds > 1:        # voxel subsampling (coarse, but 1/ds^2 cheaper)
++                            occ_cls = occ_cls[:, ::_ds, ::_ds]
++                        _OCC_CACHE["iso"] = cube_render_fast(occ_cls, W=426, H=360)
++                    iso = _OCC_CACHE["iso"]
++                    canvas[oy0:oy0 + 360, 8:8 + 426] = iso
++                    cv2.putText(canvas, "pred OCC voxel grid +-24m (bldg hidden)",
++                                (8, oy0 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
++                                (220, 220, 220), 1, cv2.LINE_AA)
+             except Exception:
+                 pass
+     # Detect the runtime environment instead of hard-coding it (2026-08-25). It used to be
