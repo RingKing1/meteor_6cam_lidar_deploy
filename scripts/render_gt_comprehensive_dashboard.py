@@ -214,6 +214,20 @@ def render_cube_occ(occ, W=640, H=864, rng_m=24.0, drop=(8,), zmax_m=3.2):
         poly = np.array([pt(r, c, 0), pt(r + 1, c, 0), pt(r + 1, c + 1, 0), pt(r, c + 1, 0)], np.int32)
         cv2.fillPoly(img, [poly], col)
 
+    # Isometric Range Rings at 10m and 20m on ground plane (after road)
+    for R in [10.0, 20.0]:
+        pts = []
+        for deg in range(0, 360, 3):
+            rad = np.radians(deg)
+            x = R * np.cos(rad)
+            y = R * np.sin(rad)
+            r = n - x / 0.4
+            c = n - y / 0.4
+            pts.append(pt(r, c, 0))
+        poly_pts = np.array(pts, np.int32)
+        ring_col = (85, 85, 105) if R == 20.0 else (58, 58, 72)
+        cv2.polylines(img, [poly_pts], True, ring_col, 1, cv2.LINE_AA)
+
     # 3D Shaded Cubes
     zz, rr, cc = np.nonzero(cube_m)
     if len(zz):
@@ -236,11 +250,29 @@ def render_cube_occ(occ, W=640, H=864, rng_m=24.0, drop=(8,), zmax_m=3.2):
             cv2.polylines(img, [tp], True, tuple(int(v * 0.40) for v in top), 1)
 
     # Ego vehicle position marker
-    cv2.drawMarker(img, pt(n, n, 0), (0, 255, 255), cv2.MARKER_TRIANGLE_UP, 16, 2)
+    p_ego = pt(n, n, 0)
+    cv2.drawMarker(img, p_ego, (0, 255, 255), cv2.MARKER_TRIANGLE_UP, 16, 2)
+
+    # Coordinate tripod at ego: +X (Forward, Red), +Y (Left, Green), +Z (Up, Blue)
+    cv2.arrowedLine(img, p_ego, pt(n - 10, n, 0), (0, 0, 255), 2, cv2.LINE_AA, tipLength=0.25)
+    cv2.arrowedLine(img, p_ego, pt(n, n - 10, 0), (0, 255, 0), 2, cv2.LINE_AA, tipLength=0.25)
+    cv2.arrowedLine(img, p_ego, pt(n, n, 4), (255, 120, 0), 2, cv2.LINE_AA, tipLength=0.25)
+
+    # Metric distance labels along axes on ground plane
+    for R in [10.0, 20.0]:
+        pt_fwd = pt(n - R / 0.4, n, 0)
+        cv2.putText(img, f"{int(R)}m", (pt_fwd[0] + 4, pt_fwd[1] + 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 220), 1, cv2.LINE_AA)
+        pt_bwd = pt(n + R / 0.4, n, 0)
+        cv2.putText(img, f"-{int(R)}m", (pt_bwd[0] + 4, pt_bwd[1] + 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (160, 160, 180), 1, cv2.LINE_AA)
+
+    p_x_max = pt(0, n, 0)
+    cv2.putText(img, "+24m (Fwd)", (p_x_max[0] + 4, p_x_max[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (210, 210, 230), 1, cv2.LINE_AA)
     return img
 
 
-def render_dashboard_frame(scene_dir: Path, deploy_dir: Path, fi: int, out_path: Path, cams_calib: dict, refined_calib: dict, T_ego_lidar: np.ndarray, draw_2d_boxes: bool = False):
+def render_dashboard_frame(scene_dir: Path, deploy_dir: Path, fi: int, out_path: Path, cams_calib: dict, refined_calib: dict, T_ego_lidar: np.ndarray, draw_2d_boxes: bool = False, traj_subdir: str = "agent_traj", stat_thresh: float = 1.0):
     """Renders a single high-resolution multi-modal composite dashboard."""
     manifest_p = scene_dir / "manifest.json"
     with open(manifest_p) as f:
@@ -264,7 +296,7 @@ def render_dashboard_frame(scene_dir: Path, deploy_dir: Path, fi: int, out_path:
             boxes_3d = zbev["boxes_3d"]
 
     # 3. Load 3.0s Trajectory Ground Truth
-    traj_p = scene_dir / "agent_traj" / f"{fi:04d}.npz"
+    traj_p = scene_dir / traj_subdir / f"{fi:04d}.npz"
     traj_boxes, trajs, tvalids, n_agents = None, None, None, 0
     if traj_p.exists():
         ztraj = np.load(traj_p)
@@ -277,7 +309,7 @@ def render_dashboard_frame(scene_dir: Path, deploy_dir: Path, fi: int, out_path:
     COLOR_MOVING = (0, 0, 255)       # Red (BGR)
     COLOR_STATIONARY = (255, 60, 0)  # Royal Blue (BGR)
 
-    def get_box_motion_status(cx, cy, threshold=0.35):
+    def get_box_motion_status(cx, cy, threshold=stat_thresh):
         if traj_boxes is None or n_agents == 0:
             return False, []
         best_dist = 1e9
@@ -496,7 +528,7 @@ def render_dashboard_frame(scene_dir: Path, deploy_dir: Path, fi: int, out_path:
     cv2.rectangle(occ_panel, (12, leg_y1), (occ_panel_w - 12, leg_y2), (14, 14, 18), -1)
     cv2.rectangle(occ_panel, (12, leg_y1), (occ_panel_w - 12, leg_y2), (50, 50, 60), 1)
     cv2.putText(occ_panel, "3D Occupancy Ground Truth", (22, leg_y1 + 26), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(occ_panel, "Voxel Grid: 0.4m x 0.4m x 0.4m (16x200x200)", (22, leg_y1 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 220, 255), 1, cv2.LINE_AA)
+    cv2.putText(occ_panel, "Range: 48m x 48m (-24m~+24m) | Rings: 10m, 20m | Grid: 4m", (22, leg_y1 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 220, 255), 1, cv2.LINE_AA)
 
     # Class Swatches & Labels (accurate BGR colors matching voxel render)
     swatch_y1 = leg_y1 + 64
@@ -527,8 +559,8 @@ def render_dashboard_frame(scene_dir: Path, deploy_dir: Path, fi: int, out_path:
     cv2.rectangle(occ_panel, (430, swatch_y2), (442, swatch_y2 + 12), (35, 15, 120), -1)
     cv2.putText(occ_panel, "2-Wheel (Brown)", (448, swatch_y2 + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (210, 210, 220), 1, cv2.LINE_AA)
 
-    cv2.putText(occ_panel, "View: Isometric 3D Projection | 4m Ground Grid | Ego: yellow triangle",
-                (22, leg_y1 + 126), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 190), 1, cv2.LINE_AA)
+    cv2.putText(occ_panel, "View: Isometric 3D | Ego: yellow triangle | Axes: +X(Red) +Y(Grn) +Z(Blu)",
+                (22, leg_y1 + 126), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 190), 1, cv2.LINE_AA)
 
     # 7. Horizontal Stack of 3 Columns
     body = np.hstack([cams_grid, bev_panel, occ_panel])
@@ -552,11 +584,11 @@ def render_dashboard_frame(scene_dir: Path, deploy_dir: Path, fi: int, out_path:
 
 
 def worker_render(task_args):
-    scene_str, deploy_str, fi, out_str, cams_calib, refined_calib, T_ego_lidar, draw_2d_boxes = task_args
+    scene_str, deploy_str, fi, out_str, cams_calib, refined_calib, T_ego_lidar, draw_2d_boxes, traj_subdir, stat_thresh = task_args
     scene_dir = Path(scene_str)
     deploy_dir = Path(deploy_str)
     out_path = Path(out_str)
-    render_dashboard_frame(scene_dir, deploy_dir, fi, out_path, cams_calib, refined_calib, T_ego_lidar, draw_2d_boxes)
+    render_dashboard_frame(scene_dir, deploy_dir, fi, out_path, cams_calib, refined_calib, T_ego_lidar, draw_2d_boxes, traj_subdir, stat_thresh)
     return str(out_path)
 
 
@@ -565,6 +597,9 @@ def main():
     parser.add_argument("--deploy-dir", default="/home/nvidia/working_ppt/Postdoc_Materials/论文3/meteor_6cam_lidar_deploy")
     parser.add_argument("--scenes", default="all", help="all or comma-separated scene list")
     parser.add_argument("--frames-per-scene", type=int, default=20, help="number of frames to sample per scene")
+    parser.add_argument("--frames", default=None, help="comma-separated specific frame indices")
+    parser.add_argument("--traj-subdir", default="agent_traj", help="trajectory subdir (default: agent_traj)")
+    parser.add_argument("--stat-thresh", type=float, default=1.0, help="stationary 3s distance threshold (default: 1.0m)")
     parser.add_argument("--out-dir", default=None, help="output directory (default: box3d_artifacts/gt_comprehensive_inspection)")
     parser.add_argument("--workers", type=int, default=6, help="parallel worker processes")
     parser.add_argument("--draw-2d-box", action="store_true", default=False, help="whether to draw 2D detection boxes (default: False)")
@@ -595,8 +630,8 @@ def main():
     print("=" * 80)
     print("  METEOR Multimodal Ground Truth Comprehensive Inspection Generator")
     print(f"  Target Scenes:       {len(scene_dirs)}")
-    print(f"  Frames Per Scene:    {args.frames_per_scene}")
-    print(f"  Total Frames Target: {len(scene_dirs) * args.frames_per_scene}")
+    print(f"  Traj Subdir:         {args.traj_subdir}")
+    print(f"  Stat Threshold:      {args.stat_thresh}m")
     print(f"  Output Directory:    {out_dir}")
     print(f"  Extrinsics:          XCalib Single-DOF Refined (deploy_extrinsics_final.json)")
     print(f"  Draw 2D Boxes:       {args.draw_2d_box}")
@@ -619,15 +654,17 @@ def main():
         T_lidar_ego = load_lidar2ego(deploy_dir, scene)
         T_ego_lidar = np.linalg.inv(T_lidar_ego)
 
-        # Sample 20 frames evenly (avoiding boundaries [20, total_frames - 45])
-        sample_indices = np.round(np.linspace(20, total_frames - 45, args.frames_per_scene)).astype(int).tolist()
+        if args.frames:
+            sample_indices = [int(f.strip()) for f in args.frames.split(",") if f.strip()]
+        else:
+            sample_indices = np.round(np.linspace(20, total_frames - 45, args.frames_per_scene)).astype(int).tolist()
 
         for fi in sample_indices:
             out_p = out_dir / scene / f"frame_{fi:04d}_dashboard.jpg"
             tasks.append((
                 str(s_dir), str(deploy_dir), fi, str(out_p),
                 cams_calib, refined_data, T_ego_lidar,
-                args.draw_2d_box
+                args.draw_2d_box, args.traj_subdir, args.stat_thresh
             ))
 
     print(f"[*] Dispatching {len(tasks)} dashboard rendering tasks across {args.workers} workers...")
