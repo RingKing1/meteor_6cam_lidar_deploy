@@ -271,7 +271,7 @@ def main():
     frame_indices = [int(f.strip()) for f in args.frames.split(",") if f.strip()]
 
     print(f"[*] Initializing dataset for validation scene: {args.scene} ...", flush=True)
-    scenes_dir = os.path.join(BASE_DIR, "scenes")
+    scenes_dir = os.path.join(BASE_DIR, "..", "scenes")
     ds = BevLaneDataset(
         root=scenes_dir,
         scenes=[args.scene],

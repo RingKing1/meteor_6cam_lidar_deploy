@@ -213,9 +213,10 @@ def process_single_frame(task_args):
         depth_dst,
         occ_dst,
         force,
+        occ_only,
     ) = task_args
 
-    if not force and os.path.exists(depth_dst) and os.path.exists(occ_dst):
+    if not force and os.path.exists(occ_dst) and (not occ_only or os.path.exists(depth_dst)):
         return fi
 
     R_el, t_el = T_el[:3, :3], T_el[:3, 3]
@@ -265,7 +266,8 @@ def process_single_frame(task_args):
             d_map[sky] = SKY_D
         depth4[ci] = d_map
 
-    np.savez_compressed(depth_dst, depth=depth4.astype(np.float16))
+    if not occ_only:
+        np.savez_compressed(depth_dst, depth=depth4.astype(np.float16))
 
     # 2. Accumulate labeled points from neighboring sweeps
     x0, y0, yaw0 = ego_poses[fi]
@@ -376,7 +378,7 @@ def process_single_frame(task_args):
     return fi
 
 
-def process_scene(scene, raw_base, scene_base, workers=16, acc_sweeps=4, force=False, limit=0):
+def process_scene(scene, raw_base, scene_base, workers=16, acc_sweeps=4, force=False, limit=0, occ_only=False):
     raw_dir = os.path.join(raw_base, scene)
     scene_dir = os.path.join(scene_base, scene)
 
@@ -424,6 +426,7 @@ def process_scene(scene, raw_base, scene_base, workers=16, acc_sweeps=4, force=F
             depth_dst,
             occ_dst,
             force,
+            occ_only,
         ))
 
     done = 0
@@ -456,6 +459,10 @@ def main():
     parser.add_argument("--workers", type=int, default=16, help="Number of parallel worker processes")
     parser.add_argument("--acc-sweeps", type=int, default=4, help="Number of temporal accumulation sweeps (+- sweeps)")
     parser.add_argument("--force", action="store_true", help="Force overwrite existing files")
+    parser.add_argument("--occ-only", action="store_true",
+                    help="regenerate occ/ only (2026-09-24): keep existing depth4 "
+                         "(already re-projected with the new extrinsics); skip the "
+                         "depth4 writer and gate the skip on occ only")
     parser.add_argument("--limit", type=int, default=0, help="Limit number of frames per scene for testing")
 
     args = parser.parse_args()
@@ -488,6 +495,7 @@ def main():
             workers=args.workers,
             acc_sweeps=args.acc_sweeps,
             force=args.force,
+            occ_only=args.occ_only,
             limit=args.limit,
         )
 
