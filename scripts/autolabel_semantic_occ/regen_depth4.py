@@ -172,6 +172,12 @@ def process_scene(args):
             try:
                 pts = read_pcd_xyz(os.path.join(raw, "lidar", f"{ts[fi]}.pcd"))
                 pe = pts @ R_el.T + t_el
+                # filter LiDAR returns on the ego car body (engine hood/bumpers/
+                # roof edge): box around the ego origin. z<0.1 keeps the ground,
+                # z>1.8 keeps objects above the car.
+                _ego = ((np.abs(pe[:, 0]) < 3.0) & (np.abs(pe[:, 1]) < 1.1)
+                        & (pe[:, 2] > 0.1) & (pe[:, 2] < 1.8))
+                pe = pe[~_ego]
                 depth = np.zeros((len(CAMS), DH, DW), np.float32)
                 sg = np.load(os.path.join(outd, f"seg2d21/{fi:04d}.npz"))["seg"]
                 for ci, ch in enumerate(CAMS):
