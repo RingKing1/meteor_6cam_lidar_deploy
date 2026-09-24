@@ -1514,6 +1514,13 @@ def main():
                          "other heads all frozen, BN stats stopped). Shared features "
                          "do not move, so seg/E2E and other outputs are numerically unchanged = "
                          "a zero-risk way to test/ship a pose-only fix")
+
+    ap.add_argument("--depth-head-only", action="store_true",
+                    help="fine-tune ONLY the depth head (depth_head/depth_up/log_sigma); "
+                         "everything else frozen with BN stats stopped (2026-09-24). Use with "
+                         "--init-ckpt <picked.pt> and all other loss weights 0: intended for "
+                         "re-adapting the depth head to a re-calibrated rig (XCalib refined "
+                         "extrinsics) while every other output stays numerically unchanged.")
     ap.add_argument("--det-only", action="store_true",
                     help="3D BBox only (for isolation): zero all non-det losses "
                          "and freeze heads off the det path. DDP crashes on parameters "
@@ -2656,7 +2663,7 @@ def main():
         if is_main:
             print(f"[freeze-trunk] training heads {_tr / 1e6:.1f}M / shared trunk "
                   f"{_fr / 1e6:.1f}M frozen (incl. BN stats)", flush=True)
-    if args.det_only:
+    if args.det_only or args.depth_head_only:
         # det path = backbone -> FPN -> depth/ctx -> lift -> temporal fusion ->
         # det_stem -> hm/reg. Everything else is frozen.
         # --det-head-only additionally freezes the trunk and moves only the det head.
@@ -2664,13 +2671,18 @@ def main():
         # ultimately overwrites hm/reg, so moving only the raw head with it frozen
         # makes the producer and the corrector disagree). seg/ego branches stay
         # frozen, so other outputs are unchanged and DDP's unused-parameter issue does not arise.
-        _KEEP = (("det_stem", "hm_head", "reg_head", "refiner.box")
-                 if args.det_head_only else
-                 ("stem", "layer1", "layer2", "layer3", "layer4",
-                  "lat1", "lat2", "lat3", "lat4", "fuse",
-                  "depth_head", "depth_up", "ctx",
-                  "tgate", "tfuse3", "tfuse",
-                  "det_stem", "hm_head", "reg_head"))
+        # --depth-head-only (2026-09-24): moves only the depth head after a rig
+        # re-calibration (XCalib), same frozen-BN discipline.
+        if args.depth_head_only:
+            _KEEP = ("depth_head", "depth_up", "log_sigma")
+        elif args.det_head_only:
+            _KEEP = ("det_stem", "hm_head", "reg_head", "refiner.box")
+        else:
+            _KEEP = ("stem", "layer1", "layer2", "layer3", "layer4",
+                     "lat1", "lat2", "lat3", "lat4", "fuse",
+                     "depth_head", "depth_up", "ctx",
+                     "tgate", "tfuse3", "tfuse",
+                     "det_stem", "hm_head", "reg_head")
         _n0 = model.module if hasattr(model, "module") else model
         _tr = _fr = 0
         def _keep(nm):
@@ -2682,7 +2694,7 @@ def main():
             else:
                 _p.requires_grad_(False)
                 _fr += _p.numel()
-        if args.det_head_only:
+        if args.det_head_only or args.depth_head_only:
             # BatchNorm in the frozen part left in train() moves its running stats,
             # breaking "other outputs unchanged". Pin those modules to eval().
             for _nm, _m in _n0.named_modules():
@@ -2690,9 +2702,13 @@ def main():
                     _m.eval()
             _n0._freeze_eval_keep = _KEEP     # marker to preserve on re-entering train()
         if is_main:
-            print(f"[det-only{'/head' if args.det_head_only else ''}] "
-                  f"training {_tr / 1e6:.1f}M / frozen {_fr / 1e6:.1f}M "
-                  f"params; non-det losses are 0", flush=True)
+            if args.depth_head_only:
+                print(f"[depth-head-only] training {_tr / 1e6:.1f}M / frozen "
+                      f"{_fr / 1e6:.1f}M params; non-depth losses are 0", flush=True)
+            else:
+                print(f"[det-only{'/head' if args.det_head_only else ''}] "
+                      f"training {_tr / 1e6:.1f}M / frozen {_fr / 1e6:.1f}M "
+                      f"params; non-det losses are 0", flush=True)
     if args.det_sup_front is not None or args.det_sup_rear is not None:
         _n = model.module if hasattr(model, "module") else model
         _n.DET_SUP_XF = args.det_sup_front

@@ -13,6 +13,7 @@
 | 本地 commit ① | `57ef360` — train.py:no_grad 修复 + resume + 存档 + val-full |
 | 本地 commit ② | `9702345` — 6 相机适配 + OCC 顶视图渲染 |
 | 本地 commit ③ | `8d37459` — `--val-workers`:val 数据加载并行(需 `--ipc=host`) |
+| 本地 commit ④ | `74330ab` — `--depth-head-only`:外参重标定后只微调 depth 头 |
 | License | Apache License 2.0(见 `LICENSE-METEOR-Apache-2.0`) |
 
 ## 目录内容
@@ -23,7 +24,7 @@
 | `dataset.py` | `bevlane/dataset.py` | 数据加载(含 6 相机 seg2d 补齐、bev_box_p 保护) |
 | `model.py` | `bevlane/model.py` | 网络定义(含 tl_head 6 相机零分支) |
 | `orin_render.py` | `deploy/orin_render.py` | Orin 渲染(含 OCC 顶视图新函数) |
-| `meteor_changes_20260923.patch` | — | **全部改动的 diff**(300 insertions / 43 deletions,4 文件) |
+| `meteor_changes_20260923.patch` | — | **全部改动的 diff**(328 insertions / 55 deletions,4 文件) |
 | `LICENSE-METEOR-Apache-2.0` | `LICENSE` | 上游许可副本(复制源码时保留) |
 
 ## 改动清单
@@ -83,6 +84,19 @@ val 阶段 OOM 时**强制补存**该 epoch 权重(此前 OOM 会跳过整个保
 > (或 `--shm-size=8g`)。Docker 默认 `/dev/shm` = **64 MB**,8 workers × prefetch 4 × 24 张/样本
 > 需要约 **1 GB**,否则报 `DataLoader worker ... Bus error`(实测:batch=2 验证时正是死在
 > 这个错误上,而不是 CUDA OOM)。
+
+#### A6. `--depth-head-only` 只微调 depth 头(commit `74330ab`)
+
+XCalib 外参重标定后,冻结的 depth 头与新的投影几何不匹配(实测:深度系统性低估,
+40-70m 段 −27%,导致 BEV seg 纵向错位与 OCC 左侧植被过度预测)。本参数:
+
+- 只保留 `depth_head` / `depth_up` / `log_sigma` 可训练(**0.9M / 51.8M**),其余冻结且
+  BN 钉死(复用 `--det-head-only` 的 `_freeze_eval_keep` 机制);
+- 其他损失权重置 0,只用 depth 损失;
+- 用法:`--init-ckpt <picked.pt> --depth-head-only --depth-w 0.3`(其余 `-w 0`),
+  配合**新外参重投影的 depth4 GT** 重新训练 2 epoch;
+- ⚠️ batch 不能放大(实测 batch=2 峰值 23.9GB OOM):全模型前向峰值激活被 CUDA
+  缓存分配器保留,`--grad-ckpt` 对冻结层无效,24GB 卡上 batch=1 是唯一安全值。
 
 ### B. 6 相机适配(commit `9702345`)
 
